@@ -417,6 +417,23 @@ BOOL WINAPI ConsoleHandler(DWORD CEvent)
     return TRUE;
 }
 
+size_t getRMemoryLimitMB()
+{
+    // This replicates the R code
+    size_t R_max_memory = INT_MAX;
+    MEMORYSTATUSEX ms;
+    ms.dwLength = sizeof(MEMORYSTATUSEX);
+    GlobalMemoryStatusEx(&ms); /* Win2k or later */
+    size_t Virtual = ms.ullTotalVirtual; /* uint64 = DWORDLONG */
+#ifdef WIN64
+    R_max_memory = (size_t)(ms.ullTotalPhys);
+#else
+    R_max_memory = (size_t)(min(Virtual - 512*1024*1024, ms.ullTotalPhys));
+#endif
+    R_max_memory = (size_t)(max(32 * 1024*1024, R_max_memory));
+    return (size_t)(R_max_memory/(1024*1024));
+}
+
 #endif //Win32
 
 static char *pwdfile=0;
@@ -3418,6 +3435,13 @@ int main(int argc, char **argv)
 		if (new_uid != -1) setuid(new_uid);
 	}
 #endif
+
+#ifdef Win32
+	char max_mem_size[512];
+	sprintf(max_mem_size, "memory.limit(%d)", (int)getRMemoryLimitMB());
+	voidEval(max_mem_size);
+#endif
+	
 	
 #if defined RSERV_DEBUG || defined Win32
     printf("Rserve: Ok, ready to answer queries.\n");
