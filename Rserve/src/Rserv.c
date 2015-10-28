@@ -128,6 +128,12 @@ the use of DT_LARGE/XT_LARGE.
      Rserv and JRclient provide encrypted passwords with server-side
      challenge (thus safe from sniffing).
 */
+#define _CRT_SECURE_CPP_OVERLOAD_STANDARD_NAMES 1
+#define _CRT_SECURE_CPP_OVERLOAD_STANDARD_NAMES_COUNT 1
+#define _CRT_SECURE_CPP_OVERLOAD_SECURE_NAMES 1
+#define _CRT_SECURE_CPP_OVERLOAD_SECURE_NAMES_MEMORY 1
+//#define _CRT_SECURE_NO_WARNINGS
+#define _WINSOCK_DEPRECATED_NO_WARNINGS
 
 #define USE_RINTERNALS
 #define SOCK_ERRORS
@@ -187,12 +193,15 @@ typedef int socklen_t;
 #include <winbase.h>
 #include <io.h>
 #include <fcntl.h>
+#include <direct.h>
 #endif
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <sisocks.h>
 #include <string.h>
+#define SOCKET int
+
 #ifdef unix
 #include <pthread.h>
 #if TIME_WITH_SYS_TIME
@@ -339,6 +348,10 @@ wfork(int socket, char* parentCmdLine, int idx)
   STARTUPINFO siStartInfo;
   DWORD dwCreationflags;
   char *modname = (char *) malloc (2048 * sizeof (char));
+  if (modname == NULL)
+  {
+	  return -1;
+  }
   char buf[128];
   size_t rc;
   BOOL bSuccess = FALSE;
@@ -354,7 +367,7 @@ wfork(int socket, char* parentCmdLine, int idx)
   siStartInfo.cb = sizeof (STARTUPINFO);
 
   //get the module name of the current process
-  if (!GetModuleFileName (GetModuleHandle (NULL), modname, 512))
+  if (!GetModuleFileName (GetModuleHandle (NULL), (LPWSTR)modname, 512))
     {
       rc = GetLastError ();
       return -1;
@@ -371,13 +384,14 @@ wfork(int socket, char* parentCmdLine, int idx)
   }
 
   //create the command line
-  sprintf (buf, "%d --ppid %d", (int) winSocks[idx], (int)GetCurrentProcessId());
-  strcat (modname, " --win32child ");
-  strcat (modname, buf);
-  strcat (modname, parentCmdLine);
+  sprintf_s (buf, 128, "%d --ppid %d", (int) winSocks[idx], (int)GetCurrentProcessId());
+  strcat_s (modname, 2048, " --win32child ");
+  strcat_s (modname, 2048, buf);
+  strcat_s (modname, 2048, parentCmdLine);
 
   // Create the child process. 
-  bSuccess = CreateProcess (NULL, modname,      // command line 
+  bSuccess = CreateProcess (NULL, 
+							(LPWSTR)modname,      // command line 
                             NULL,       // process security attributes 
                             NULL,       // primary thread security attributes 
                             TRUE,       // handles are inherited 
@@ -610,7 +624,7 @@ static rlen_t getStorageSize(SEXP x) {
 			if (!ct)
 				len += 4L;
 			else {
-				rlen_t sl = strlen(ct) + 1L;				
+				rlen_t sl = (rlen_t)strlen(ct) + 1L;				
 				len += align(sl);
 			}
 		}
@@ -741,7 +755,11 @@ static unsigned int* storeSEXP(unsigned int* buf, SEXP x, rlen_t storage_size) {
 		buf++;
 		attrFixup;
 		*buf = itop(ll); buf++;
+#ifdef Win32
+		if (ll) memcpy_s(buf, sizeof(buf), RAW(x), ll);
+#else
 		if (ll) memcpy(buf, RAW(x), ll);
+#endif
 		ll += 3; ll /= 4;
 		buf += ll;
 		goto didit;
@@ -779,13 +797,17 @@ static unsigned int* storeSEXP(unsigned int* buf, SEXP x, rlen_t storage_size) {
 		st = (char *)buf;
 		for (i = 0; i < nx; i++) {
 			const char *cv = CHAR_FE(STRING_ELT(x, i));
-			rlen_t l = strlen(cv);
+			rlen_t l = (rlen_t)strlen(cv);
 			if (STRING_ELT(x, i) == R_NaString) {
 				cv = (const char*) NaStringRepresentation;
 				l = 1;
 			} else if ((unsigned char) cv[0] == NaStringRepresentation[0]) /* we will double the leading 0xff to avoid abiguity between NA and "\0xff" */
 				(st++)[0] = (char) NaStringRepresentation[0];
+#ifdef Win32
+			strcpy_s(st, _countof(st), cv);
+#else
 			strcpy(st, cv);
+#endif
 			st += l + 1;
 		}
 		/* pad with '\01' to make sure we can determine the number of elements */
@@ -839,8 +861,12 @@ static unsigned int* storeSEXP(unsigned int* buf, SEXP x, rlen_t storage_size) {
 		}
 		buf++;
 		attrFixup;
+#ifdef Win32
+		strcpy_s((char*)buf,_countof(buf), val);
+#else
 		strcpy((char*)buf, val);
-		sl = strlen((char*)buf); sl++;
+#endif
+		sl = (rlen_t)strlen((char*)buf); sl++;
 		while (sl & 3) /* pad by 0 to a length divisible by 4 (since 0.1-10) */
 			((char*)buf)[sl++] = 0;
 		buf = (unsigned int*)(((char*)buf) + sl);
@@ -1032,7 +1058,7 @@ static SEXP decode_to_SEXP(unsigned int **buf, int *UPC)
 #ifdef RSERV_DEBUG
 		printf(" - returned from attributes(@%p)\n", (void*)*buf);
 #endif
-		ln -= (((char*)b) - ((char*)pab)); /* adjust length */
+		ln -= (rlen_t)(((char*)b) - ((char*)pab)); /* adjust length */
 	}
 
 	/* b = beginning of the SEXP data (after attrs)
@@ -1134,7 +1160,11 @@ static SEXP decode_to_SEXP(unsigned int **buf, int *UPC)
 	case XT_RAW:
 		i = ptoi(*b);
 		PROTECT(val = allocVector(RAWSXP, i)); (*UPC)++;
+#ifdef Win32
+		memcpy_s(RAW(val), sizeof(val), (b + 1), i);
+#else
 		memcpy(RAW(val), (b + 1), i);
+#endif
 		*buf = (unsigned int*)((char*)b + ln);
 		break;
 
@@ -1257,13 +1287,21 @@ static SEXP decode_to_SEXP(unsigned int **buf, int *UPC)
 			head = CDR(head);
 		}
 		if (has_class) /* if it has a class slot, we have to set the object bit */
-			SET_OBJECT(val, 1);
+		{
+			if (val != 0)
+			{
+				SET_OBJECT(val, 1);
+			}
+		}
 #ifdef SET_S4_OBJECT
 		/* FIXME: we have currently no way of knowing whether an object
 		   derived from a non-S4 type is actually S4 object. Hence
 		   we can only flag "pure" S4 objects */
-		if (TYPEOF(val) == S4SXP)
-			SET_S4_OBJECT(val);
+		if (val != 0)
+		{
+			if (TYPEOF(val) == S4SXP)
+				SET_S4_OBJECT(val);
+		}
 #endif
 	}
     return val;
@@ -1347,7 +1385,12 @@ static int new_gid = -1, new_uid = -1;
 #endif
 
 static void load_pwd_cache() {
+#ifdef Win32
+	FILE *f = NULL;
+	fopen_s(&f, pwdfile, "r");
+#else
 	FILE *f = fopen(pwdfile, "r");
+#endif
 	if (f) {
 		int fs = 0;
 		fseek(f, 0, SEEK_END);
@@ -1373,14 +1416,18 @@ struct source_entry {
 /* load config file */
 static int loadConfig(char *fn)
 {
-	FILE *f;
+	FILE *f = NULL;
 	char buf[512];
 	char *c,*p,*c1;
     
 #ifdef RSERV_DEBUG
 	printf("Loading config file %s\n",fn);
 #endif
+#ifdef Win32
+	fopen_s(&f,fn,"r");
+#else
 	f = fopen(fn,"r");
+#endif
 	if (!f) {
 #ifdef RSERV_DEBUG
 		printf("Failed to find config file %s\n",fn);
@@ -1435,11 +1482,21 @@ static int loadConfig(char *fn)
 				if (*p) {
 					struct source_entry* se= (struct source_entry*) malloc(sizeof(struct source_entry)+strlen(p)+16);
 					if (!strcmp(c,"source")) {
+#ifdef Win32
+						strcpy_s(se->line, strlen(p) + 16, "try(source(\"");
+						strcat_s(se->line, strlen(p) + 16, p);
+						strcat_s(se->line, strlen(p) + 16, "\"))");
+#else
 						strcpy(se->line, "try(source(\"");
 						strcat(se->line, p);
 						strcat(se->line, "\"))");
+#endif
 					} else
+#ifdef Win32
+						strcpy_s(se->line, strlen(p) + 16, p);
+#else
 						strcpy(se->line, p);
+#endif
 					se->next=0;
 					if (!src_tail)
 						src_tail=src_list=se;
@@ -1495,7 +1552,7 @@ static int loadConfig(char *fn)
 				if (l - allowed_ips >= 127)
 					fprintf(stderr, "WARNING: Maximum of allowed IPs (127) exceeded, ignoring 'allow %s'\n", p);
 					else {
-						*l = strdup(p);
+						*l = _strdup(p);
 						l++;
 						*l = 0;
 					}
@@ -1503,15 +1560,15 @@ static int loadConfig(char *fn)
 			if (!strcmp(c, "control") && (p[0] == 'e' || p[0] == 'y' || p[1] == '1'))
 				child_control = 1;
 			if (!strcmp(c,"workdir"))
-				workdir = (*p) ? strdup(p) : 0;
+				workdir = (*p) ? _strdup(p) : 0;
 			if (!strcmp(c,"encoding") && *p)
 				set_string_encoding(p, 1);
 			if (!strcmp(c,"socket"))
-				localSocketName = (*p) ? strdup(p) : 0;
+				localSocketName = (*p) ? _strdup(p) : 0;
 			if (!strcmp(c,"sockmod") && *p)
 					localSocketMode = satoi(p);
 			if (!strcmp(c,"pwdfile"))
-				pwdfile = (*p) ? strdup(p) : 0;
+				pwdfile = (*p) ? _strdup(p) : 0;
 			if (!strcmp(c,"auth"))
 				authReq=(*p=='1' || *p=='y' || *p=='r' || *p=='e') ? 1 : 0;
 			if (!strcmp(c,"interactive"))
@@ -1686,7 +1743,7 @@ unsigned char session_key[32];
 int detach_session(SOCKET s) {
     SAIN ssa;
 	int port=32768;
-	SOCKET ss=FCF("open socket",socket(AF_INET,SOCK_STREAM,0));
+	SOCKET ss=FCF("open socket",(int)socket(AF_INET,SOCK_STREAM,0));
     int reuse=1; /* enable socket address reusage */
 	socklen_t sl = sizeof(session_peer_sa);
 	struct dsresp {
@@ -1750,7 +1807,11 @@ int detach_session(SOCKET s) {
 	dsr.pt1  = itop(SET_PAR(DT_INT,sizeof(int)));
 	dsr.port = itop(port);
 	dsr.pt2  = itop(SET_PAR(DT_BYTESTREAM,32));
+#ifdef Win32
+	memcpy_s(dsr.key, sizeof(dsr.key), session_key, 32);
+#else
 	memcpy(dsr.key, session_key, 32);							
+#endif
 	
 	sendRespData(s, RESP_OK, 3*sizeof(int)+32, &dsr);
 	closesocket(s);
@@ -1774,7 +1835,7 @@ SOCKET resume_session() {
 	printf("session: resuming session, waiting for connections.\n");
 #endif
 
-	while ((s=accept(session_socket, (SA*)&lsa,&al))>1) {
+	while ((s=(int)accept(session_socket, (SA*)&lsa,&al))>1) {
 		if (lsa.sin_addr.s_addr != session_peer_sa.sin_addr.s_addr) {
 #ifdef RSERV_DEBUG
 			printf("session: different IP, rejecting\n");
@@ -1831,7 +1892,11 @@ static pwdf_t *pwd_open() {
 		f->f = 0;
 		return f;
 	}
+#ifdef Win32
+	fopen_s(&f->f, pwdfile, "r");
+#else
 	f->f = fopen(pwdfile, "r");
+#endif
 	if (!f->f) {
 		free(f);
 		return 0;
@@ -1909,7 +1974,7 @@ void *cancelValidateConn(void *ifd) {
         } else if (cmd == CMD_validate) {
         }
 
-	close(sfd);
+	_close(sfd);
 //#ifdef Win32
 //    return;
 //#endif 
@@ -1920,8 +1985,7 @@ void *cancelValidateConn(void *ifd) {
 #endif
 
 //    exit(0);
-
-
+	return 0;
 }
 
 /* working thread/function. the parameter is of the type struct args* */
@@ -1931,7 +1995,7 @@ decl_sbthread newConn(void *thp) {
     struct phdr ph;
     char *buf, *c,*cc,*c1,*c2;
     int pars;
-    int i,j,n;
+   // int i,j,n;
     int process;
 	int rn;
     ParseStatus stat;
@@ -1942,7 +2006,7 @@ decl_sbthread newConn(void *thp) {
     int Rerror;
     int authed=0;
     int unaligned=0;
-	char spid[10];
+//	char spid[10];
 #ifdef HAS_CRYPT
     char salt[5];
 #endif
@@ -1985,7 +2049,7 @@ decl_sbthread newConn(void *thp) {
 			closesocket(a->s);
 			if (cinp[0] != -1) { /* if we have a valid pipe register the child */
 				child_process_t *cp = (child_process_t*) malloc(sizeof(child_process_t));
-				close(cinp[1]); /* close the write end which is what the child will be using */
+				_close(cinp[1]); /* close the write end which is what the child will be using */
 #ifdef RSERV_DEBUG
 				printf("child %d was spawned, registering input pipe\n", (int)lastChild);
 #endif
@@ -2004,7 +2068,7 @@ decl_sbthread newConn(void *thp) {
 	is_child = 1;
 	if (cinp[0] != -1) { /* if we have a vaild pipe to the parent set it up */
 		parent_pipe = cinp[1];
-		close(cinp[0]);
+		_close(cinp[0]);
 	}
 
 #ifdef Win32
@@ -2047,12 +2111,12 @@ decl_sbthread newConn(void *thp) {
 		mkdir(wdname,0777);
 		chdir(wdname);
 #else
-		if (chdir(workdir))
-			mkdir(workdir);
+		if (_chdir(workdir))
+			_mkdir(workdir);
 		wdname[511]=0;
-		snprintf(wdname,511,"%s/conn%d",workdir,a->s);
-		mkdir(wdname);
-		chdir(wdname);
+		_snprintf_s(wdname,511,511,"%s/conn%d",workdir,a->s);
+		_mkdir(wdname);
+		_chdir(wdname);
 #endif
     }
     
@@ -2076,7 +2140,11 @@ decl_sbthread newConn(void *thp) {
     }
 #endif
     
-    strcpy(buf,IDstring);
+#ifdef Win32
+	strcpy_s(buf, _countof(buf), IDstring);
+#else
+	strcpy(buf,IDstring);
+#endif
     if (authReq) {
 #ifdef HAS_CRYPT
 		/* advertize crypt */
@@ -2090,7 +2158,11 @@ decl_sbthread newConn(void *thp) {
 		if (usePlain) memcpy(buf + 24,"ARpt",4);
 #else
 		/* if crypt is not an option, we may need to advertize plain text if enabled */
+#ifdef Win32
+		if (usePlain) memcpy_s(buf + 16, sizeof(buf) + 16, "ARpt", 4);
+#else
 		if (usePlain) memcpy(buf + 16, "ARpt", 4);
+#endif
 #endif
     }
 
@@ -2133,7 +2205,7 @@ decl_sbthread newConn(void *thp) {
 #ifdef RSERV_DEBUG
 			printf("loading (raw) buffer (awaiting %d bytes)\n", (int)plen);
 #endif
-			while((rn = recv(s, pbuf + i, (plen - i > max_sio_chunk) ? max_sio_chunk : (plen - i), 0))) {
+			while((rn = recv(s, pbuf + i, (plen - i > max_sio_chunk) ? max_sio_chunk : (int)(plen - i), 0))) {
 				if (rn > 0) i += rn;
 				if (i >= plen || rn < 1) break;
 			}
@@ -2149,7 +2221,7 @@ decl_sbthread newConn(void *thp) {
 					printf("resizing input buffer (was %ld, need %ld) to %ld\n", (long)inBuf, (long) plen, (long)(((plen | 0x1fffL) + 1L)));
 #endif
 					free(buf); /* the buffer is just a scratchpad, so we don't need to use realloc */
-					buf = (char*) malloc(inBuf = ((plen | 0x1fffL) + 1L)); /* use 8kB granularity */
+					buf = (char*) malloc(inBuf = (((int)plen | 0x1fffL) + 1L)); /* use 8kB granularity */
 					if (!buf) {
 #ifdef RSERV_DEBUG
 						fprintf(stderr,"FATAL: out of memory while resizing buffer to %d,\n", (int)inBuf);
@@ -2164,7 +2236,7 @@ decl_sbthread newConn(void *thp) {
 				printf("loading buffer (awaiting %ld bytes)\n",(long) plen);
 #endif
 				i = 0;
-				while ((rn = recv(s, ((char*)buf) + i, (plen - i > max_sio_chunk) ? max_sio_chunk : (plen - i), 0))) {
+				while ((rn = recv(s, ((char*)buf) + i, ((int)plen - i > max_sio_chunk) ? max_sio_chunk : ((int)plen - i), 0))) {
 					if (rn > 0) i += rn;
 					if (i >= plen || rn < 1) break;
 				}
@@ -2212,7 +2284,7 @@ decl_sbthread newConn(void *thp) {
 			} else {
 				printf("discarding buffer because too big (awaiting %ld bytes)\n", (long)plen);
 				size_t i = plen, chk = (inBuf < max_sio_chunk) ? inBuf : max_sio_chunk;
-				while((rn = recv(s, (char*)buf, (i < chk) ? i : chk, 0))) {
+				while((rn = recv(s, (char*)buf, (int)(i < chk) ? (int)i : (int)chk, 0))) {
 					if (rn > 0) i -= rn;
 					if (i < 1 || rn < 1) break;
 				}
@@ -2371,22 +2443,22 @@ decl_sbthread newConn(void *thp) {
 						sendResp(s, SET_STAT(RESP_ERR, ERR_ctrl_closed));
 					else {
 						long cmd[2] = { 0, 0 };
-						if (ph.cmd == CMD_ctrlEval) { cmd[0] = CCTL_EVAL; cmd[1] = strlen(parP[0]) + 1; }
-						else if (ph.cmd == CMD_ctrlSource) { cmd[0] = CCTL_SOURCE; cmd[1] = strlen(parP[0]) + 1; }
+						if (ph.cmd == CMD_ctrlEval) { cmd[0] = CCTL_EVAL; cmd[1] = (long)strlen(parP[0]) + 1; }
+						else if (ph.cmd == CMD_ctrlSource) { cmd[0] = CCTL_SOURCE; cmd[1] = (long)strlen(parP[0]) + 1; }
 						else cmd[0] = CCTL_SHUTDOWN;
-						if (write(parent_pipe, cmd, sizeof(cmd)) != sizeof(cmd)) {
+						if (_write(parent_pipe, cmd, sizeof(cmd)) != sizeof(cmd)) {
 #ifdef RSERV_DEBUG
 							printf(" - send to parent pipe (cmd=%ld, len=%ld) failed, closing parent pipe\n", cmd[0], cmd[1]);
 #endif
-							close(parent_pipe);
+							_close(parent_pipe);
 							parent_pipe = -1;
 							sendResp(s, SET_STAT(RESP_ERR, ERR_ctrl_closed));
 						} else {
-							if (cmd[1] && write(parent_pipe, parP[0], cmd[1]) != cmd[1]) {
+							if (cmd[1] && _write(parent_pipe, parP[0], cmd[1]) != cmd[1]) {
 #ifdef RSERV_DEBUG
 								printf(" - send to parent pipe (cmd=%ld, len=%ld, sending data) failed, closing parent pipe\n", cmd[0], cmd[1]);
 #endif
-								close(parent_pipe);
+								_close(parent_pipe);
 								parent_pipe = 01;
 								sendResp(s, SET_STAT(RESP_ERR, ERR_ctrl_closed));
 							} else
@@ -2481,7 +2553,11 @@ decl_sbthread newConn(void *thp) {
 #ifdef RSERV_DEBUG
 					printf(">>CMD_open/createFile(%s)\n",c);
 #endif
+#ifdef Win32
+					fopen_s(&cf, c,(ph.cmd==CMD_openFile)?"rb":"wb");
+#else
 					cf=fopen(c,(ph.cmd==CMD_openFile)?"rb":"wb");
+#endif
 					if (!cf)
 						sendResp(s,SET_STAT(RESP_ERR,ERR_IOerror));
 					else
@@ -2549,7 +2625,7 @@ decl_sbthread newConn(void *thp) {
 					else {
 						size_t i = fread(fbuf, 1, fbufl, cf);
 						if (i > 0)
-							sendRespData(s, RESP_OK, i, fbuf);
+							sendRespData(s, RESP_OK, (rlen_t)i, fbuf);
 						else
 							sendResp(s, RESP_OK);
 						if (fbuf != sfbuf)
@@ -2828,7 +2904,7 @@ decl_sbthread newConn(void *thp) {
 
 								/* set type to DT_SEXP and correct length */
 								if ((tail - sxh) > 0xfffff0) { /* we must use the "long" format */
-									rlen_t ll = tail - sxh;
+									rlen_t ll = (rlen_t)(tail - sxh);
 									((unsigned int*)sendbuf)[0] = itop(SET_PAR(DT_SEXP | DT_LARGE, ll & 0xffffff));
 									((unsigned int*)sendbuf)[1] = itop(ll >> 24);
 									sendhead = sendbuf;
@@ -2840,7 +2916,7 @@ decl_sbthread newConn(void *thp) {
 #ifdef RSERV_DEBUG
 								printf("stored SEXP; length=%ld (incl. DT_SEXP header)\n",(long) (tail - sendhead));
 #endif
-								sendRespData(s, RESP_OK, tail - sendhead, sendhead);
+								sendRespData(s, RESP_OK, (rlen_t)(tail - sendhead), sendhead);
 								if (tempSB) { /* if this is just a temporary sendbuffer then shrink it back to normal */
 #ifdef RSERV_DEBUG
 									printf("Releasing temporary sendbuf and restoring old size of %ld bytes.\n", sendBufSize);
@@ -2901,8 +2977,8 @@ decl_sbthread newConn(void *thp) {
     printf("rm workdir\n");
 #endif
     if (workdir) {
-		chdir(workdir);
-		rmdir(wdname);
+		_chdir(workdir);
+		_rmdir(wdname);
     }
     
 #ifdef RSERV_DEBUG
@@ -2927,8 +3003,11 @@ void startThread(int connfd) {
 #ifdef Win32
     void startWinThread(int connfd) {
         int *fd = (int *) malloc (1 * sizeof (int));
-        *fd = connfd;
-        HANDLE threadHandle = CreateThread( NULL, 0, cancelValidateConn, (int *)fd, 0, NULL);
+		if (fd != NULL)
+		{
+			*fd = connfd;
+			HANDLE threadHandle = CreateThread(NULL, 0, cancelValidateConn, (int *)fd, 0, NULL);
+		}
 }
 #endif
 
@@ -2947,7 +3026,7 @@ void serverLoop() {
     fd_set readfds;
 #ifdef Win32
     int nc, w;
-	FD_SET connectionSet;
+//	FD_SET connectionSet;
 #endif
     
 #ifdef unix
@@ -2987,8 +3066,8 @@ void serverLoop() {
 		remove(localSocketName); /* remove existing if possible */
 #endif
 	} else
-		ss=FCF("open socket",socket(AF_INET,SOCK_STREAM,0));
-		cs=FCF("open socket",socket(AF_INET,SOCK_STREAM,0));
+		ss=FCF("open socket",(int)socket(AF_INET,SOCK_STREAM,0));
+		cs=FCF("open socket",(int)socket(AF_INET,SOCK_STREAM,0));
                 reuse=1; /* enable socket address reusage */
                 setsockopt(ss,SOL_SOCKET,SO_REUSEADDR,(const char*)&reuse,sizeof(reuse));
 	        setsockopt(cs,SOL_SOCKET,SO_REUSEADDR,(const char*)&reuse,sizeof(reuse));
@@ -3075,7 +3154,7 @@ void serverLoop() {
 				sa->s=CF("accept",accept(ss,(SA*)&(sa->su),&al));
 			} else
 #endif
-				sa->s=CF("accept",accept(ss,(SA*)&(sa->sa),&al));
+				sa->s=CF("accept",(int)accept(ss,(SA*)&(sa->sa),&al));
 			sa->ucix=UCIX++;
 			sa->ss=ss;
 #ifdef Win32
@@ -3096,27 +3175,33 @@ void serverLoop() {
 			if (localonly && !localSocketName) {
 				char **laddr=allowed_ips;
 				int allowed=0;
-				if (!laddr) { 
-					allowed_ips = (char**) malloc(sizeof(char*)*2);
-					allowed_ips[0] = strdup("127.0.0.1");
-					allowed_ips[1] = 0;
-					laddr=allowed_ips;
+				if (!laddr) {
+					allowed_ips = (char**)malloc(sizeof(char*) * 2);
+					if (allowed_ips != 0)
+					{
+						allowed_ips[0] = _strdup("127.0.0.1");
+						allowed_ips[1] = 0;
+						laddr = allowed_ips;
+					}
 				}
-				while (*laddr) if (sa->sa.sin_addr.s_addr==inet_addr(*(laddr++))) { allowed=1; break; };
-				if (allowed) {
+				if (laddr != 0) {
+					while (*laddr) if (sa->sa.sin_addr.s_addr == inet_addr(*(laddr++))) { allowed = 1; break; };
+					if (allowed) {
 #ifdef THREADED
-					sbthread_create(newConn,sa);
+						sbthread_create(newConn,sa);
 #else
-				newConn(sa);
+						newConn(sa);
 #ifdef FORKED
-				/* when the child returns it means it's done (likely an error)
-				   but it is forked, so the only right thing to do is to exit */
-				if (is_child)
-					exit(2);
+						/* when the child returns it means it's done (likely an error)
+						   but it is forked, so the only right thing to do is to exit */
+						if (is_child)
+							exit(2);
 #endif
 #endif
-				} else
-					closesocket(sa->s);
+					}
+					else
+						closesocket(sa->s);
+				}
 			} else { /* ---> remote enabled */
 #ifdef THREADED
                 
@@ -3214,7 +3299,7 @@ void serverLoop() {
 #endif
 #ifdef Win32
      } else if (selRet > 0 && FD_ISSET(cs,&readfds)) {
-		   connfd = accept(cs, (struct sockaddr*)NULL, NULL);
+		   connfd = (int)accept(cs, (struct sockaddr*)NULL, NULL);
                    startWinThread(connfd);
                    continue;
      }
@@ -3242,7 +3327,7 @@ int main(int argc, char **argv)
 {
     int stat,i;    
 	rserve_rev[0]=0;
-	int socket;  //used only when launching Win32 child process via CreateProcess
+	int socket = 0;  //used only when launching Win32 child process via CreateProcess
 	struct args *sa; //used only when launching Win32 child process via CreateProcess
 
 	{ /* cut out the SVN revision from the Id string */
@@ -3250,7 +3335,11 @@ int main(int argc, char **argv)
 		if (c) {
 			const char *d = c + 3;
 			c = d; while (*c && *c != ' ') c++;
+#ifdef Win32
+			strncpy_s(rserve_rev, _countof(rserve_rev), d, c - d);
+#else
 			strncpy(rserve_rev, d, c - d);
+#endif
 		}
 	}
 #ifdef Win32
@@ -3393,8 +3482,13 @@ int main(int argc, char **argv)
 	//hold them here.
 	memset(win32ChildCmdLine,'\0', 1024);
 	for(i = 1; i < argc; i++) {
+#ifdef Win32
+		strcat_s(win32ChildCmdLine, 1024, " ");
+		strcat_s(win32ChildCmdLine, 1024, argv[i]);
+#else
 		strcat(win32ChildCmdLine, " ");
 		strcat(win32ChildCmdLine, argv[i]);
+#endif
 	}
 
 #if R_VERSION >= R_Version(2,5,0)
@@ -3438,7 +3532,7 @@ int main(int argc, char **argv)
 
 #ifdef Win32
 	char max_mem_size[512];
-	sprintf(max_mem_size, "memory.limit(%d)", (int)getRMemoryLimitMB());
+	sprintf_s(max_mem_size, 512, "memory.limit(%d)", (int)getRMemoryLimitMB());
 	voidEval(max_mem_size);
 #endif
 	
@@ -3473,10 +3567,13 @@ int main(int argc, char **argv)
     } else {
             initsocks();
             sa=(struct args*)malloc(sizeof(struct args));
-            memset(sa,0,sizeof(struct args));
-            sa->s = socket;
-            newConn(sa);
-            donesocks();
+			if (sa != 0)
+			{
+				memset(sa, 0, sizeof(struct args));
+				sa->s = socket;
+				newConn(sa);
+				donesocks();
+			}
     }
 #ifdef unix
     if (localSocketName)
