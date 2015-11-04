@@ -49,6 +49,7 @@
 #include <string.h>
 #include <stdlib.h>
 #define inet_aton(A,B) (0, B.s_addr=inet_addr(A))
+#define fprintf fprintf_s
 
 #define sockerrno WSAGetLastError()
 

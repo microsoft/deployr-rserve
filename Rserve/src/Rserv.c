@@ -187,6 +187,7 @@ typedef unsigned long rlen_t;
 #ifdef Win32
 #define WIN32_LEAN_AND_MEAN
 typedef int socklen_t;
+#define fprintf fprintf_s
 #define CAN_TCP_NODELAY
 #define _WINSOCKAPI_
 #include <windows.h>
@@ -367,7 +368,7 @@ wfork(int socket, char* parentCmdLine, int idx)
   siStartInfo.cb = sizeof (STARTUPINFO);
 
   //get the module name of the current process
-  if (!GetModuleFileName (GetModuleHandle (NULL), (LPWSTR)modname, 512))
+  if (!GetModuleFileNameA (GetModuleHandle (NULL), modname, 512))
     {
       rc = GetLastError ();
       return -1;
@@ -390,8 +391,8 @@ wfork(int socket, char* parentCmdLine, int idx)
   strcat_s (modname, 2048, parentCmdLine);
 
   // Create the child process. 
-  bSuccess = CreateProcess (NULL, 
-							(LPWSTR)modname,      // command line 
+  bSuccess = CreateProcessA (NULL, 
+							modname,      // command line 
                             NULL,       // process security attributes 
                             NULL,       // primary thread security attributes 
                             TRUE,       // handles are inherited 
@@ -482,6 +483,27 @@ static int localUCIX;
 #else
 #define localUCIX UCIX
 #endif
+
+/* size of the input buffer (default 512kB)
+was 2k before 1.23, but since 1.22 we support CMD_assign/set and hence
+the incoming packets can be substantially bigger.
+
+since 1.29 we support input buffer resizing,
+therefore we start with a small buffer and allocate more if necessary
+*/
+
+static rlen_t inBuf = 32768; /* 32kB should be ok unless CMD_assign sends large data */
+
+/* static buffer size used for file transfer.
+The user is still free to allocate its own size  */
+#define sfbufSize 32768 /* static file buffer size */
+
+#ifndef decl_sbthread
+#define decl_sbthread void
+#endif
+
+/* pid of the last child (not really used ATM) */
+static int lastChild;
 
 /* string encoding handling */
 #if (R_VERSION < R_Version(2,8,0)) || (defined DISABLE_ENCODING)
@@ -804,7 +826,7 @@ static unsigned int* storeSEXP(unsigned int* buf, SEXP x, rlen_t storage_size) {
 			} else if ((unsigned char) cv[0] == NaStringRepresentation[0]) /* we will double the leading 0xff to avoid abiguity between NA and "\0xff" */
 				(st++)[0] = (char) NaStringRepresentation[0];
 #ifdef Win32
-			strcpy_s(st, _countof(st), cv);
+			strcpy_s(st, inBuf + 8, cv);
 #else
 			strcpy(st, cv);
 #endif
@@ -862,7 +884,7 @@ static unsigned int* storeSEXP(unsigned int* buf, SEXP x, rlen_t storage_size) {
 		buf++;
 		attrFixup;
 #ifdef Win32
-		strcpy_s((char*)buf,_countof(buf), val);
+		strcpy_s((char*)buf, inBuf + 8, val);
 #else
 		strcpy((char*)buf, val);
 #endif
@@ -1596,26 +1618,6 @@ static int loadConfig(char *fn)
 	return 0;
 }
 
-/* size of the input buffer (default 512kB)
-   was 2k before 1.23, but since 1.22 we support CMD_assign/set and hence
-   the incoming packets can be substantially bigger.
-
-   since 1.29 we support input buffer resizing,
-   therefore we start with a small buffer and allocate more if necessary
-*/
-
-static rlen_t inBuf = 32768; /* 32kB should be ok unless CMD_assign sends large data */
-
-/* static buffer size used for file transfer.
-   The user is still free to allocate its own size  */
-#define sfbufSize 32768 /* static file buffer size */
-
-#ifndef decl_sbthread
-#define decl_sbthread void
-#endif
-
-/* pid of the last child (not really used ATM) */
-static int lastChild;
 
 #ifdef FORKED
 static void sigHandler(int i) {
@@ -1974,7 +1976,7 @@ void *cancelValidateConn(void *ifd) {
         } else if (cmd == CMD_validate) {
         }
 
-	_close(sfd);
+	closesocket(sfd);
 //#ifdef Win32
 //    return;
 //#endif 
@@ -2141,7 +2143,7 @@ decl_sbthread newConn(void *thp) {
 #endif
     
 #ifdef Win32
-	strcpy_s(buf, _countof(buf), IDstring);
+	strcpy_s(buf, inBuf + 8, IDstring);
 #else
 	strcpy(buf,IDstring);
 #endif
@@ -2246,7 +2248,7 @@ decl_sbthread newConn(void *thp) {
 				unaligned = 0;
 #ifdef RSERV_DEBUG
 				printf("parsing parameters (buf=%p, len=%ld)\n", buf, (long) plen);
-				if (plen > 0) printDump(buf,plen);
+				if (plen > 0) printDump(buf,(int)plen);
 #endif
 				c = buf + ph.dof;
 				while((c < buf + ph.dof + plen) && (phead = ptoi(*((unsigned int*)c)))) {
