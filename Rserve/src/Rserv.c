@@ -143,7 +143,13 @@ the use of DT_LARGE/XT_LARGE.
 /* this is the type used to calculate pointer distances */
 /* note: we may want to use size_t or something more compatible */
 typedef unsigned long rlen_t;
-
+#ifndef Win32
+#define _write write
+#define _close close
+#define _rmdir rmdir
+#define _strdup strdup
+#define _chdir chdir
+#endif
 #ifdef ULONG_MAX
 #define rlen_max ULONG_MAX
 #else
