@@ -49,6 +49,7 @@
 #include <string.h>
 #include <stdlib.h>
 #define inet_aton(A,B) (0, B.s_addr=inet_addr(A))
+#define fprintf fprintf_s
 
 #define sockerrno WSAGetLastError()
 
@@ -138,24 +139,38 @@ int sockerrorchecks(char *buf, int blen, int res) {
   *buf=0;
   if (res==-1) {
     switch(sockerrno) {
-    case EBADF: strncpy(buf,"bad descriptor",blen); break;
-    case EINVAL: strncpy(buf,"already in use",blen); break;
-    case EACCES: strncpy(buf,"access denied",blen); break;
-    case ENOTSOCK: strncpy(buf,"descriptor is not a socket",blen); break;
-    case EOPNOTSUPP: strncpy(buf,"operation not supported",blen); break;
-    case EFAULT: strncpy(buf,"fault",blen); break;
-    case EWOULDBLOCK: strncpy(buf,"operation would block",blen); break;
-    case EISCONN: strncpy(buf,"is already connected",blen); break;
-    case ECONNREFUSED: strncpy(buf,"connection refused",blen); break;
-    case ETIMEDOUT: strncpy(buf,"operation timed out",blen); break;
-    case ENETUNREACH: strncpy(buf,"network is unreachable",blen); break;
-    case EADDRINUSE: strncpy(buf,"address already in use",blen); break;
-    case EINPROGRESS: strncpy(buf,"in progress",blen); break;
-    case EALREADY: strncpy(buf,"previous connect request not completed yet",blen); break;
-#ifdef unix
-    default: snprintf(buf,blen,"unknown socket error %d",sockerrno);
+#ifdef Win32
+    case EBADF: strncpy_s(buf,_countof(buf),"bad descriptor",blen); break;
+	case EINVAL: strncpy_s(buf, _countof(buf), "already in use", blen); break;
+	case EACCES: strncpy_s(buf, _countof(buf), "access denied", blen); break;
+	case ENOTSOCK: strncpy_s(buf, _countof(buf), "descriptor is not a socket", blen); break;
+	case EOPNOTSUPP: strncpy_s(buf, _countof(buf), "operation not supported", blen); break;
+	case EFAULT: strncpy_s(buf, _countof(buf), "fault", blen); break;
+	case EWOULDBLOCK: strncpy_s(buf, _countof(buf), "operation would block", blen); break;
+	case EISCONN: strncpy_s(buf, _countof(buf), "is already connected", blen); break;
+	case ECONNREFUSED: strncpy_s(buf, _countof(buf), "connection refused", blen); break;
+	case ETIMEDOUT: strncpy_s(buf, _countof(buf), "operation timed out", blen); break;
+	case ENETUNREACH: strncpy_s(buf, _countof(buf), "network is unreachable", blen); break;
+	case EADDRINUSE: strncpy_s(buf, _countof(buf), "address already in use", blen); break;
+	case EINPROGRESS: strncpy_s(buf, _countof(buf),"in progress", blen); break;
+	case EALREADY: strncpy_s(buf, _countof(buf), "previous connect request not completed yet", blen); break;
+	default: sprintf_s(buf, _countof(buf),"unknown socket error %d", sockerrno);
 #else
-    default: sprintf(buf,"unknown socket error %d",sockerrno);
+	case EBADF: strncpy(buf,"bad descriptor",blen); break;
+	case EINVAL: strncpy(buf, "already in use", blen); break;
+	case EACCES: strncpy(buf, "access denied", blen); break;
+	case ENOTSOCK: strncpy(buf, "descriptor is not a socket", blen); break;
+	case EOPNOTSUPP: strncpy(buf, "operation not supported", blen); break;
+	case EFAULT: strncpy(buf, "fault", blen); break;
+	case EWOULDBLOCK: strncpy(buf, "operation would block", blen); break;
+	case EISCONN: strncpy(buf, "is already connected", blen); break;
+	case ECONNREFUSED: strncpy(buf, "connection refused", blen); break;
+	case ETIMEDOUT: strncpy(buf, "operation timed out", blen); break;
+	case ENETUNREACH: strncpy(buf, "network is unreachable", blen); break;
+	case EADDRINUSE: strncpy(buf, "address already in use", blen); break;
+	case EINPROGRESS: strncpy(buf, "in progress", blen); break;
+	case EALREADY: strncpy(buf, "previous connect request not completed yet", blen); break;
+	default: snprintf(buf, blen, "unknown socket error %d", sockerrno);
 #endif
     }
   }
