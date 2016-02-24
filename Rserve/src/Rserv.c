@@ -3295,13 +3295,56 @@ void serverLoop() {
 					cp = cp->next;
 			}
 		} else if (selRet > 0 && FD_ISSET(cs,&readfds)) {
+                        ca=(struct args*)malloc(sizeof(struct args));
+			memset(ca,0,sizeof(struct args));
+			al=sizeof(ca->sa);
+#ifdef unix
+			if (localSocketName) {
+				cl=sizeof(ca->su);
+				ca->s=CF("accept",accept(cs,(SA*)&(ca->su),&cl));
+			} else
+#endif
+				ca->s=CF("accept",(int)accept(cs,(SA*)&(ca->sa),&cl));
+				ca->ucix=UCIX++;
+				ca->ss=cs;
+#ifdef Win32
+				ca->n = nc;
+#endif
+
+			if (localonly && !localSocketName) {
+				char **laddr=allowed_ips;
+				int allowed=0;
+				if (!laddr) {
+					allowed_ips = (char**)malloc(sizeof(char*) * 2);
+					if (allowed_ips != 0)
+					{
+						allowed_ips[0] = _strdup("127.0.0.1");
+						allowed_ips[1] = 0;
+						laddr = allowed_ips;
+					}
+				}
+				if (laddr != 0) {
+					while (*laddr) if (ca->sa.sin_addr.s_addr == inet_addr(*(laddr++))) { allowed = 1; break; };
+					if (allowed) {
+						connfd = accept(cs, (struct sockaddr*)NULL, NULL);
+                        			startThread(connfd);
+                                                closesocket(ca->s);
+                                                free(ca);
+                                                continue;
+					}
+					else
+						closesocket(ca->s);
+				}
+			} else {
 #ifdef RSERV_DEBUG
 			printf(" just before cancel/ping\n");
 #endif
                         connfd = accept(cs, (struct sockaddr*)NULL, NULL);
                         startThread(connfd);
-
+                        closesocket(ca->s);
+                        free(ca);
                         continue;
+                        }
      }		
 
 #endif
