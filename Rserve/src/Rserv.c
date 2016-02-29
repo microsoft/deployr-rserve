@@ -201,6 +201,9 @@ typedef int socklen_t;
 #include <io.h>
 #include <fcntl.h>
 #include <direct.h>
+#ifdef _SECURE
+#include <banned.h>
+#endif
 #endif
 
 #include <stdio.h>
