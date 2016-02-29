@@ -1,7 +1,8 @@
 deployr-rserve
 ==============
 
-`deployr-rserve` is a fork of the popular R package, [Rserve](https://github.com/s-u/Rserve) from Simon Urbanek.  
+`deployr-rserve` is a fork of the popular R package, [Rserve](https://github.com/s-u/Rserve) from Simon Urbanek.
+  
 This fork adds the following features:
 
 1.  Concurrent R sessions under Rserve on the Windows platform
