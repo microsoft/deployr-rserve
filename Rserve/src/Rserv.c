@@ -188,7 +188,7 @@ typedef unsigned long rlen_t;
 #endif
 #endif
 
-#define DEFAULT_MAX_CLIENTS 16
+#define DEFAULT_MAX_CLIENTS 256
 /* we have no configure for Win32 so we have to take care of socklen_t */
 #ifdef Win32
 #define WIN32_LEAN_AND_MEAN
@@ -419,7 +419,9 @@ wfork(int socket, char* parentCmdLine, int idx)
       return -1;
     }
 
-  return (int) (winPI[idx]).hProcess;
+  printf("create handles... Process = %d Thread = %d Socket = %d\n", (int)winPI[idx].hProcess, (int)winPI[idx].hThread, (int)winSocks[idx]);
+  
+  return (int)(winPI[idx]).hProcess;
 }
 
 BOOL WINAPI ConsoleHandler(DWORD CEvent)
@@ -3127,12 +3129,21 @@ SOCKET cs;
     while(active) { /* main serving loop */
 #ifdef Win32
         nc = nextAvailableChild();
-        if(nc < 0) {
-// The maximum number of child processes are engaged. Sleep to avoid
-// spinning and then check for workers that have finished.
-          Sleep(500);
-          goto wait;
-        }
+		// Sleep to avoid spinning and then check for workers that have finished.
+		Sleep(100);
+		for (int jj = 0; jj<MAX_CLIENTS; ++jj){
+			if (winPI[jj].hProcess > 0) {
+				w = WaitForSingleObject(winPI[jj].hProcess, 0);
+				if (w == WAIT_OBJECT_0) {
+					printf("close handles... w = %d Process = %d Thread = %d Socket = %d\n", w, (int)winPI[jj].hProcess, (int)winPI[jj].hThread, (int)winSocks[jj]);
+					closesocket(winSocks[jj]);
+					winSocks[jj] = INVALID_SOCKET;
+					CloseHandle(winPI[jj].hProcess);
+					CloseHandle(winPI[jj].hThread);
+					winPI[jj].hProcess = 0;
+			}
+		}
+	}
 #endif
 #ifdef unix
 //		int maxfd = ss;
@@ -3344,19 +3355,6 @@ SOCKET cs;
      }		
 
       
-#ifdef Win32
-wait:
-// Check a child processes that has exited, close his socket
-// descriptor and flag him as available for use.
-      for(int jj=0;jj<MAX_CLIENTS;++jj){
-        w = WaitForSingleObject(winPI[jj].hProcess, 0);
-        if(w > -1 && w < MAX_CLIENTS) {
-          closesocket(winSocks[w]);
-          winSocks[w] = INVALID_SOCKET;
-          CloseHandle((HANDLE *) &winPI[jj]);
-        }
-      }
-#endif
     } // end of while(active)
 }
 
@@ -3509,7 +3507,8 @@ int main(int argc, char **argv)
     for (i = 0; i < MAX_CLIENTS; ++i)
       {
         winSocks[i] = INVALID_SOCKET;
-      }
+		winPI[i].hProcess = 0;
+	}
 
 	if (SetConsoleCtrlHandler(
 			(PHANDLER_ROUTINE)ConsoleHandler,TRUE)==FALSE)
