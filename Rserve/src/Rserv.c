@@ -201,6 +201,9 @@ typedef int socklen_t;
 #include <io.h>
 #include <fcntl.h>
 #include <direct.h>
+#ifdef _SECURE
+#include <banned.h>
+#endif
 #endif
 
 #include <stdio.h>
@@ -1340,7 +1343,7 @@ static int localonly = 1;
 
 /* server socket */
 static SOCKET ss;
-static SOCKET cs;
+//static SOCKET cs;
 
 /* arguments structure passed to a working thread */
 struct args {
@@ -3019,14 +3022,26 @@ void startThread(int connfd) {
 }
 #endif
 
+int getIpAddress(int newfd) {
+    struct sockaddr_in addr;
+    socklen_t addr_size = sizeof(struct sockaddr_in);
+    int res = getpeername(newfd, (struct sockaddr *)&addr, &addr_size);
+    char clientip[20];
+    strcpy(clientip, inet_ntoa(addr.sin_addr));
+    if( strcmp(clientip,"127.0.0.1") == 0) 
+         return 1;
+    return 0;
+}
+
 void serverLoop() {
+SOCKET cs;
 #ifdef unix
     int iret1;
 #endif
     SAIN ssa,cssa;
-    socklen_t al;
+    socklen_t al,cl;
     int reuse;
-    struct args *sa;
+    struct args *sa,*ca;
     struct sockaddr_in lsa;
     int connfd = 0;
 	struct timeval timv;
@@ -3294,24 +3309,41 @@ void serverLoop() {
 				} else
 					cp = cp->next;
 			}
+#endif
 		} else if (selRet > 0 && FD_ISSET(cs,&readfds)) {
+
+			printf("in cancel\n");
+			if (localonly && !localSocketName) {
+				connfd = accept(cs, (struct sockaddr*)NULL, NULL);
+				int allowed = getIpAddress(connfd);
+//				int allowed=0;
+
+					if (allowed) {
+//						connfd = accept(cs, (struct sockaddr*)NULL, NULL);
+#ifdef unix
+                        			startThread(connfd);
+#else
+						startWinThread(connfd);
+#endif
+                                                continue;
+					}
+
+
+			} else {  // remote enabled
 #ifdef RSERV_DEBUG
 			printf(" just before cancel/ping\n");
 #endif
                         connfd = accept(cs, (struct sockaddr*)NULL, NULL);
+#ifdef unix
                         startThread(connfd);
-
+#else
+			startWinThread(connfd);
+#endif
                         continue;
+                       }
      }		
 
-#endif
-#ifdef Win32
-     } else if (selRet > 0 && FD_ISSET(cs,&readfds)) {
-		   connfd = (int)accept(cs, (struct sockaddr*)NULL, NULL);
-                   startWinThread(connfd);
-                   continue;
-     }
-#endif       
+      
 #ifdef Win32
 wait:
 // Check a child processes that has exited, close his socket
@@ -3327,6 +3359,8 @@ wait:
 #endif
     } // end of while(active)
 }
+
+
 
 extern int Rf_initEmbeddedR(int, char**);
 
