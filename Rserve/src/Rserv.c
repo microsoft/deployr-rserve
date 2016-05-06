@@ -3353,7 +3353,6 @@ SOCKET cs;
                         continue;
                        }
      }		
-
       
     } // end of while(active)
 }
