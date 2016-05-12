@@ -1,5 +1,5 @@
 Package: deployrRserve
-Version: 8.0.0
+Version: 8.0.5
 Title: Binary R server
 Author: Simon Urbanek <Simon.Urbanek@r-project.org>
 Maintainer: Simon Urbanek <Simon.Urbanek@r-project.org>

@@ -24,8 +24,8 @@ server:	$(XFILES)
 	-cp Rserve Rserve-bin$(SHLIB_EXT)
 	-cp Rserve.dbg Rserve-dbg$(SHLIB_EXT)
 # merging to bin/Rserve works only if installed from sources, won't work for binary
-	-./mergefat Rserve "$(Rbin)/Rserve7.4"
-	-./mergefat Rserve.dbg "$(Rbin)/Rserve7.4.dbg"
+	-./mergefat Rserve "$(Rbin)/Rserve"
+	-./mergefat Rserve.dbg "$(Rbin)/Rserve.dbg"
 # installing the bin files is disabled for now because additional archs won't work anyway
 #	-cp $(XFILES) $(Rbin)
 #	-mkdir -p ../inst/bin$(R_ARCH) 2>/dev/null
@@ -36,8 +36,8 @@ server:	$(XFILES)
 	-@if test "x$(R_ARCH)" = x; then cp $(XFILES) ../inst/; else echo "Rserve binary was installed in libs because multi-arch support is enabled." > ../inst/Rserve-bin.txt; fi
 
 install: @WITH_SERVER_TRUE@ $(XFILES)
-@WITH_SERVER_TRUE@	-cp Rserve $(Rbin)/Rserve7.4
-@WITH_SERVER_TRUE@	-cp Rserve.dbg $(Rbin)/Rserve7.4.dbg
+@WITH_SERVER_TRUE@	-cp Rserve $(Rbin)/Rserve
+@WITH_SERVER_TRUE@	-cp Rserve.dbg $(Rbin)/Rserve.dbg
 
 Rserve:	Rserv.o session.o md5.o
 	$(CC) $^ -o $@ $(linkR) $(LIBS) $(PKG_LIBS) -lpthread
