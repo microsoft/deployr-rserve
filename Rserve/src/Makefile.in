@@ -39,11 +39,20 @@ install: @WITH_SERVER_TRUE@ $(XFILES)
 @WITH_SERVER_TRUE@	-cp Rserve $(Rbin)/Rserve
 @WITH_SERVER_TRUE@	-cp Rserve.dbg $(Rbin)/Rserve.dbg
 
+Rserv.o: Rserv.c Rsrv.h
+	$(CC) $(MYINC) $(Rincludes) -c Rserv.c -o $@ -DNDEBUG -DDAEMON -fstack-protector $(PKG_CPPFLAGS) $(CPPFLAGS) $(CFLAGS)
+
+session.o: session.o
+	$(CC) $(MYINC) $(Rincludes) -c session.c -o $@ -DNDEBUG -DDAEMON -fstack-protector $(PKG_CPPFLAGS) $(CPPFLAGS) $(CFLAGS)
+
+md5.o: md5.c 
+	$(CC) $(MYINC) $(Rincludes) -c md5.c -o $@ -DNDEBUG -DDAEMON -fstack-protector $(PKG_CPPFLAGS) $(CPPFLAGS) $(CFLAGS)
+
 Rserve:	Rserv.o session.o md5.o
 	$(CC) $^ -o $@ $(linkR) $(LIBS) $(PKG_LIBS) -lpthread
 
 Rserv_d.o: Rserv.c Rsrv.h
-	$(CC) $(MYINC) $(Rincludes) -c Rserv.c -o $@ -DNODAEMON -DRSERV_DEBUG -g $(PKG_CPPFLAGS) $(CPPFLAGS) $(CFLAGS)
+	$(CC) $(MYINC) $(Rincludes) -c Rserv.c -o $@ -DNODAEMON -DRSERV_DEBUG -g -fstack-protector $(PKG_CPPFLAGS) $(CPPFLAGS) $(CFLAGS)
 
 Rserve.dbg:	Rserv_d.o session.o md5.o
 	$(CC) $^ -o $@ $(linkR) $(LIBS) $(PKG_LIBS) -lpthread
