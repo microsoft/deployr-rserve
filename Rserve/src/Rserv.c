@@ -1123,7 +1123,8 @@ static SEXP decode_to_SEXP(unsigned int **buf, int *UPC)
 			(*UPC)++;
 			i = 0;
 			while (i < vl) {
-				LOGICAL(val)[i] = cb[i];
+				//      LOGICAL(val)[i] = cb[i];
+                LOGICAL(val)[i] = (cb[i] == 1) ? TRUE : ((cb[i] == 0) ? FALSE : NA_LOGICAL);
 				i++;
 			}
 			while ((i & 3) != 0) i++;
