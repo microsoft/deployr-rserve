@@ -90,7 +90,8 @@
 copy $(SolutionDir)$(Platform)\$(Configuration)\*.exe $(SolutionDir)\..\Rserve\inst
 cd $(SolutionDir)\..
 mkdir RServetempLibrary
-R CMD INSTALL  --no-multiarch --no-libs --no-test-load --build --library=RServetempLibrary Rserve 
+c:/R-4BLD-3.2.2-2015-11-09/bin/R CMD INSTALL  --no-multiarch --no-libs --no-test-load --build --library=RServetempLibrary Rserve 
+rmdir /s /q RServetempLibrary 
 rmdir /s /q RServetempLibrary
 </Command>
       <Outputs>$(SolutiontDir)\..\*.zip</Outputs>
@@ -132,7 +133,8 @@ rmdir /s /q RServetempLibrary
 copy $(SolutionDir)$(Platform)\$(Configuration)\*.exe $(SolutionDir)\..\Rserve\inst
 cd $(SolutionDir)\..
 mkdir RServetempLibrary
-R CMD INSTALL  --no-multiarch --no-libs --no-test-load --build --library=RServetempLibrary Rserve 
+c:/R-4BLD-3.2.2-2015-11-09/bin/R CMD INSTALL  --no-multiarch --no-libs --no-test-load --build --library=RServetempLibrary Rserve 
+rmdir /s /q RServetempLibrary 
 rmdir /s /q RServetempLibrary</Command>
       <Outputs>$(SolutiontDir)\..\*.zip</Outputs>
     </CustomBuildStep>
