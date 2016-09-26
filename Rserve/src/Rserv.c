@@ -2122,14 +2122,14 @@ decl_sbthread newConn(void *thp) {
 		if (chdir(workdir))
 			mkdir(workdir,0777);
 		wdname[511]=0;
-		snprintf(wdname,511,"%s/conn%d",workdir,a->ucix);
+		snprintf(wdname,511,"%s/conn%d",workdir, (int)getpid());
 		mkdir(wdname,0777);
 		chdir(wdname);
 #else
 		if (_chdir(workdir))
 			_mkdir(workdir);
 		wdname[511]=0;
-		_snprintf_s(wdname,511,511,"%s/conn%d",workdir,a->s);
+		_snprintf_s(wdname,511,511,"%s/conn%d",workdir, (int)GetCurrentProcessId());
 		_mkdir(wdname);
 		_chdir(wdname);
 #endif
