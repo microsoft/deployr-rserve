@@ -385,16 +385,17 @@ wfork(int socket, char* parentCmdLine, int idx)
   dwCreationflags = GetPriorityClass (GetCurrentProcess ()) | CREATE_NEW_PROCESS_GROUP ;
 
   //duplicate the socket handle
-  if(!DuplicateHandle (GetCurrentProcess (), (HANDLE) socket,
-                       GetCurrentProcess (), (HANDLE *) &winSocks[idx],
-                       0, TRUE, DUPLICATE_SAME_ACCESS))
-  {
-    rc = GetLastError ();
-    return -1;
-  }
+  //if(!DuplicateHandle (GetCurrentProcess (), (HANDLE) socket,
+  //                     GetCurrentProcess (), (HANDLE *) &winSocks[idx],
+  //                     0, TRUE, DUPLICATE_SAME_ACCESS))
+  //{
+  //  rc = GetLastError ();
+  //  return -1;
+  //}
 
+  winSocks[idx] = socket;
   //create the command line
-  sprintf_s (buf, 128, "%d --ppid %d", (int) winSocks[idx], (int)GetCurrentProcessId());
+  sprintf_s (buf, 128, "%d --ppid %d", socket, (int)GetCurrentProcessId());
   strcat_s (modname, 2048, " --win32child ");
   strcat_s (modname, 2048, buf);
   strcat_s (modname, 2048, parentCmdLine);
@@ -2121,14 +2122,14 @@ decl_sbthread newConn(void *thp) {
 		if (chdir(workdir))
 			mkdir(workdir,0777);
 		wdname[511]=0;
-		snprintf(wdname,511,"%s/conn%d",workdir,a->ucix);
+		snprintf(wdname,511,"%s/conn%d",workdir, (int)getpid());
 		mkdir(wdname,0777);
 		chdir(wdname);
 #else
 		if (_chdir(workdir))
 			_mkdir(workdir);
 		wdname[511]=0;
-		_snprintf_s(wdname,511,511,"%s/conn%d",workdir,a->s);
+		_snprintf_s(wdname,511,511,"%s/conn%d",workdir, (int)GetCurrentProcessId());
 		_mkdir(wdname);
 		_chdir(wdname);
 #endif
@@ -3370,6 +3371,17 @@ int main(int argc, char **argv)
 	int socket = 0;  //used only when launching Win32 child process via CreateProcess
 	struct args *sa; //used only when launching Win32 child process via CreateProcess
 
+#ifdef WIN32
+	WORD wVersionRequested;
+	WSADATA wsaData;
+	int err;
+
+	/* Use the MAKEWORD(lowbyte, highbyte) macro declared in Windef.h */
+	wVersionRequested = MAKEWORD(2, 0);
+
+	err = WSAStartup(wVersionRequested, &wsaData);
+#endif
+
 	{ /* cut out the SVN revision from the Id string */
 		const char *c = strstr(rserve_ver_id, ".c ");
 		if (c) {
@@ -3472,10 +3484,35 @@ int main(int argc, char **argv)
 			//used only when launching Win32 child process via CreateProcess 
 			if (!strcmp(argv[i]+2,"win32child")) {
 				iWin32Child = 1;
-				if (i+1==argc)
-					fprintf(stderr,"Missing socket specification for --win32child.\n");
+				if (i + 1 == argc)
+				{
+					fprintf(stderr, "Missing socket specification for --win32child.\n");
+				}
 				else
+				{
 					socket = atoi(argv[++i]);
+					WSAPROTOCOL_INFO pi;
+
+					if (WSADuplicateSocket((SOCKET)socket, GetCurrentProcessId(), &pi))
+					{
+						int rc = WSAGetLastError();
+						printf("rc_WSADuplicateSocket=%d\n", rc);
+						return -1;
+					}
+
+					SOCKET socket_duplicate = 0;
+					if ((socket_duplicate = WSASocket(pi.iAddressFamily, pi.iSocketType, pi.iProtocol, &pi, 0, 0)) != INVALID_SOCKET)
+					{
+						printf("WSASocket=%d\n", socket_duplicate);
+					}
+					else
+					{
+						int rc = WSAGetLastError();
+						printf("rc_WSASocket=%d\n", rc);
+						return -1;
+					}
+					socket = socket_duplicate;
+				}
 			}
 			if (!strcmp(argv[i]+2,"ppid")) {
 				if (i+1==argc)
