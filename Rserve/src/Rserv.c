@@ -384,15 +384,6 @@ wfork(int socket, char* parentCmdLine, int idx)
     }
   dwCreationflags = GetPriorityClass (GetCurrentProcess ()) | CREATE_NEW_PROCESS_GROUP ;
 
-  //duplicate the socket handle
-  //if(!DuplicateHandle (GetCurrentProcess (), (HANDLE) socket,
-  //                     GetCurrentProcess (), (HANDLE *) &winSocks[idx],
-  //                     0, TRUE, DUPLICATE_SAME_ACCESS))
-  //{
-  //  rc = GetLastError ();
-  //  return -1;
-  //}
-
   winSocks[idx] = socket;
   //create the command line
   sprintf_s (buf, 128, "%d --ppid %d", socket, (int)GetCurrentProcessId());
@@ -3490,6 +3481,7 @@ int main(int argc, char **argv)
 				}
 				else
 				{
+#ifdef WIN32					
 					socket = atoi(argv[++i]);
 					WSAPROTOCOL_INFO pi;
 
@@ -3512,6 +3504,7 @@ int main(int argc, char **argv)
 						return -1;
 					}
 					socket = socket_duplicate;
+#endif
 				}
 			}
 			if (!strcmp(argv[i]+2,"ppid")) {
