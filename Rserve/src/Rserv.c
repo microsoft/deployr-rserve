@@ -1387,7 +1387,7 @@ static void sendRespData(int s, int rsp, rlen_t len, void *buf) {
 #ifdef FORCE_V0100
 char *IDstring="Rsrv0100QAP1R700\r\n\r\n----------\r\n";
 #else
-char *IDstring="Rsrv0103QAP1\r\n\r\n----------DV73\r\n";
+char *IDstring="Rsrv0103QAP1\r\n\r\n----------DV74\r\n";
 #endif
 
 /* require authentication flag (default: no) */
