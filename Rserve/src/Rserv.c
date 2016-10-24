@@ -137,7 +137,7 @@ the use of DT_LARGE/XT_LARGE.
 
 #define USE_RINTERNALS
 #define SOCK_ERRORS
-#define LISTENQ 16
+#define LISTENQ 512
 #define MAIN
 
 /* this is the type used to calculate pointer distances */
@@ -193,7 +193,7 @@ typedef unsigned long rlen_t;
 #ifdef Win32
 #define WIN32_LEAN_AND_MEAN
 typedef int socklen_t;
-#define fprintf fprintf_s
+//#define fprintf fprintf_s
 #define CAN_TCP_NODELAY
 #define _WINSOCKAPI_
 #include <windows.h>
@@ -308,6 +308,7 @@ static int port = default_Rsrv_port;
 static int cancelPort = default_Rsrv_port + 1;
 static int active = 1; /* 1=server loop is active, 0=shutdown */
 static int UCIX   = 1; /* unique connection index */
+static int maxlistenq = LISTENQ;
 
 static char *localSocketName = 0; /* if set listen on this local (unix) socket instead of TCP/IP */
 static int localSocketMode = 0;   /* if set, chmod is used on the socket when created */
@@ -1487,9 +1488,9 @@ static int loadConfig(char *fn)
 				if (*p) {
 					int np = satoi(p);
 					if (np > 0) {
-                                            port = np;
-                                            cancelPort = port + 1;
-                                        }
+						port = np;
+                        cancelPort = port + 1;
+                    }
 				}
 			}
 			if (!strcmp(c,"maxinbuf")) {
@@ -1501,6 +1502,16 @@ static int loadConfig(char *fn)
 					}
 				}
 			}
+			if (!strcmp(c, "maxlistenq")) {
+				if (*p) {
+					int ns = satoi(p);
+					if (ns > 32) {
+						maxlistenq = ns;
+						maxlistenq *= LISTENQ;
+					}
+			}
+		}
+
 			if (!strcmp(c,"source") || !strcmp(c,"eval")) {
 #ifdef RSERV_DEBUG
 				printf("Found source entry \"%s\"\n", p);
@@ -1792,7 +1803,7 @@ int detach_session(SOCKET s) {
 		}
 	}
 
-    if (listen(ss,LISTENQ)) {
+    if (listen(ss, maxlistenq)) {
 #ifdef RSERV_DEBUG
 		printf("session: cannot listen.\n");
 #endif
@@ -3114,8 +3125,8 @@ SOCKET cs;
 		FCF("bind",bind(ss,build_sin(&ssa,0,port),sizeof(ssa)));
 		FCF("bind",bind(cs,build_sin(&cssa,0,cancelPort),sizeof(cssa)));
     
-                FCF("listen",listen(ss,LISTENQ));
-	        FCF("listen",listen(cs,LISTENQ));
+        FCF("listen",listen(ss, maxlistenq));
+	    FCF("listen",listen(cs, maxlistenq));
      
     int maxfd = ss;
     if (cs > maxfd) maxfd = cs;
