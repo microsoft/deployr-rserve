@@ -188,7 +188,7 @@ typedef unsigned long rlen_t;
 #endif
 #endif
 
-#define DEFAULT_MAX_CLIENTS 256
+#define DEFAULT_MAX_CLIENTS 2048
 /* we have no configure for Win32 so we have to take care of socklen_t */
 #ifdef Win32
 #define WIN32_LEAN_AND_MEAN
@@ -217,6 +217,7 @@ typedef int socklen_t;
 #if TIME_WITH_SYS_TIME
 # include <sys/time.h>
 # include <time.h>
+# include <mutex.h>
 #else
 # if HAVE_SYS_TIME_H
 #  include <sys/time.h>
@@ -328,19 +329,21 @@ static char *workdir="c:/temp";
 PROCESS_INFORMATION *winPI;
 SOCKET *winSocks;
 
+#ifdef Win32
+HANDLE ghMutex = NULL;
+#endif
+
 /* Unfortunately, Windows client socket connections must be closed by the
  * process that created them--unlike Unix, the child process can't
  * close the connection.
  */
-void
-release(SOCKET s)
+void release(SOCKET s)
 {
   closesocket(s);
   s = INVALID_SOCKET;
 }
 
-int
-nextAvailableChild()
+int nextAvailableChild()
 {
   int j, ret = -1;
   for(j=0;j < MAX_CLIENTS;++j) {
@@ -352,8 +355,24 @@ nextAvailableChild()
   return ret;
 }
 
-int
-wfork(int socket, char* parentCmdLine, int idx)
+void printLastError()
+{
+	DWORD dLastError = GetLastError();
+	LPCTSTR strErrorMessage = NULL;
+
+	FormatMessage(
+		FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS | FORMAT_MESSAGE_ARGUMENT_ARRAY | FORMAT_MESSAGE_ALLOCATE_BUFFER,
+		NULL,
+		dLastError,
+		0,
+		(LPWSTR)&strErrorMessage,
+		0,
+		NULL);
+
+	printf("%s\n", strErrorMessage);
+
+}
+int wfork(int socket, char* parentCmdLine, int idx)
 {
   SECURITY_ATTRIBUTES saAttr;
   STARTUPINFO siStartInfo;
@@ -366,6 +385,7 @@ wfork(int socket, char* parentCmdLine, int idx)
   char buf[128];
   size_t rc;
   BOOL bSuccess = FALSE;
+  int m;
 
   // Set the bInheritHandle flag so pipe handles are inherited. 
   saAttr.nLength = sizeof (SECURITY_ATTRIBUTES);
@@ -385,7 +405,10 @@ wfork(int socket, char* parentCmdLine, int idx)
     }
   dwCreationflags = GetPriorityClass (GetCurrentProcess ()) | CREATE_NEW_PROCESS_GROUP ;
 
-  winSocks[idx] = socket;
+  m = WaitForSingleObject(ghMutex, INFINITE);
+  if (m == WAIT_OBJECT_0) {
+	  winSocks[idx] = socket;
+
   //create the command line
   sprintf_s (buf, 128, "%d --ppid %d", socket, (int)GetCurrentProcessId());
   strcat_s (modname, 2048, " --win32child ");
@@ -393,28 +416,34 @@ wfork(int socket, char* parentCmdLine, int idx)
   strcat_s (modname, 2048, parentCmdLine);
 
   // Create the child process. 
-  bSuccess = CreateProcessA (NULL, 
-							modname,      // command line 
-                            NULL,       // process security attributes 
-                            NULL,       // primary thread security attributes 
-                            TRUE,       // handles are inherited 
-                            dwCreationflags,    // creation flags 
-                            NULL,       // use parent's environment 
-                            NULL,       // use parent's current directory 
-                            &siStartInfo,       // STARTUPINFO pointer 
-                            &winPI[idx]);       // receives PROCESS_INFORMATION 
+	bSuccess = CreateProcessA (NULL,
+						modname,      // command line 
+                        NULL,       // process security attributes 
+                        NULL,       // primary thread security attributes 
+                        TRUE,       // handles are inherited 
+                        dwCreationflags,    // creation flags 
+                        NULL,       // use parent's environment 
+                        NULL,       // use parent's current directory 
+                        &siStartInfo,       // STARTUPINFO pointer 
+                        &winPI[idx]);       // receives PROCESS_INFORMATION 
+  }
+  else
+  {
+	  printLastError();
+  }
+  ReleaseMutex(ghMutex);
+  
   free (modname);
 
-  // If an error occurs, exit the application. 
-  if (!bSuccess)
-    {
-      printf ("CreateProcess Failed.\n");
-      return -1;
-    }
+	// If an error occurs, exit the application. 
+	if (!bSuccess)
+	{
+		printf ("CreateProcess Failed.\n");
+		return -1;
+	}
+	printf("create handles... Process = %d Thread = %d \n", (int)winPI[idx].hProcess, (int)winPI[idx].hThread);
 
-  printf("create handles... Process = %d Thread = %d Socket = %d\n", (int)winPI[idx].hProcess, (int)winPI[idx].hThread, (int)winSocks[idx]);
-  
-  return (int)(winPI[idx]).hProcess;
+	return (int)(winPI[idx]).hProcess;
 }
 
 BOOL WINAPI ConsoleHandler(DWORD CEvent)
@@ -1990,8 +2019,7 @@ void *cancelValidateConn(void *ifd) {
                 }
         } else if (cmd == CMD_validate) {
         }
-
-	closesocket(sfd);
+		closesocket(sfd);
 //#ifdef Win32
 //    return;
 //#endif 
@@ -2056,7 +2084,7 @@ decl_sbthread newConn(void *thp) {
 		cinp[0] = -1;
 	if (!iWin32Child) {
 #ifdef Win32
-        printf(" in newConn\n"); 
+        //printf(" in newConn\n"); 
 		if ((lastChild = wfork(a->s, win32ChildCmdLine, a->n)) != 0) { /* parent/master part */
 
 #else
@@ -3039,6 +3067,54 @@ int getIpAddress(int newfd) {
     return 0;
 }
 
+#ifdef Win32
+DWORD WINAPI cleanUpLoop(void* data)
+{
+	int w, m;
+	while(TRUE)
+	{
+		// Sleep to avoid spinning and then check for workers that have finished.
+		Sleep(200);
+		m = WaitForSingleObject(ghMutex, INFINITE);
+		if (m == WAIT_OBJECT_0)
+		{
+			for (int jj = 0; jj < MAX_CLIENTS; ++jj)
+			{
+				if (winPI[jj].hProcess > 0)
+				{
+					w = WaitForSingleObject(winPI[jj].hProcess, 0);
+					if (w == WAIT_OBJECT_0)
+					{
+						winSocks[jj] = INVALID_SOCKET;
+						printf("close handles... w = %d Process = %d Thread = %d\n", w, (int)winPI[jj].hProcess, (int)winPI[jj].hThread);
+						__try
+						{
+							CloseHandle(winPI[jj].hProcess);
+							CloseHandle(winPI[jj].hThread);
+						}
+						__except (EXCEPTION_EXECUTE_HANDLER)
+						{
+							printf("couldn't close handle\n");
+						}	
+						winPI[jj].hProcess = 0;
+
+					}
+				}
+			}
+		}
+		else
+		{
+			printLastError();
+		}
+
+		ReleaseMutex(ghMutex);
+		
+	}
+}
+#endif
+
+
+
 void serverLoop() {
 SOCKET cs;
 #ifdef unix
@@ -3054,8 +3130,8 @@ SOCKET cs;
 	int selRet=0;
     fd_set readfds;
 #ifdef Win32
-    int nc, w;
-//	FD_SET connectionSet;
+	int nc, m;
+	//	FD_SET connectionSet;
 #endif
     
 #ifdef unix
@@ -3097,9 +3173,9 @@ SOCKET cs;
 	} else
 		ss=FCF("open socket",(int)socket(AF_INET,SOCK_STREAM,0));
 		cs=FCF("open socket",(int)socket(AF_INET,SOCK_STREAM,0));
-                reuse=1; /* enable socket address reusage */
-                setsockopt(ss,SOL_SOCKET,SO_REUSEADDR,(const char*)&reuse,sizeof(reuse));
-	        setsockopt(cs,SOL_SOCKET,SO_REUSEADDR,(const char*)&reuse,sizeof(reuse));
+        reuse=1; /* enable socket address reusage */
+        setsockopt(ss,SOL_SOCKET,SO_REUSEADDR,(const char*)&reuse,sizeof(reuse));
+	    setsockopt(cs,SOL_SOCKET,SO_REUSEADDR,(const char*)&reuse,sizeof(reuse));
 #ifdef Win32
     // Set the socket I/O mode: In this case FIONBIO
     // enables or disables the blocking mode for the
@@ -3130,40 +3206,30 @@ SOCKET cs;
      
     int maxfd = ss;
     if (cs > maxfd) maxfd = cs;
-    while(active) { /* main serving loop */
+
 #ifdef Win32
-        nc = nextAvailableChild();
-		// Sleep to avoid spinning and then check for workers that have finished.
-		Sleep(100);
-		for (int jj = 0; jj<MAX_CLIENTS; ++jj){
-			if (winPI[jj].hProcess > 0) {
-				w = WaitForSingleObject(winPI[jj].hProcess, 0);
-				if (w == WAIT_OBJECT_0) {
-					printf("close handles... w = %d Process = %d Thread = %d Socket = %d\n", w, (int)winPI[jj].hProcess, (int)winPI[jj].hThread, (int)winSocks[jj]);
-					closesocket(winSocks[jj]);
-					winSocks[jj] = INVALID_SOCKET;
-					CloseHandle(winPI[jj].hProcess);
-					CloseHandle(winPI[jj].hThread);
-					winPI[jj].hProcess = 0;
-			}
-		}
-	}
+	HANDLE thread = CreateThread(NULL, 0, cleanUpLoop, NULL, 0, NULL);
 #endif
+
+    while(active) { /* main serving loop */
+
 #ifdef unix
+
 //		int maxfd = ss;
-//        if (cs > maxfd) maxfd = cs;
+//      if (cs > maxfd) maxfd = cs;
 #ifdef FORKED
-		while (waitpid(-1,0,WNOHANG)>0);
+		while (waitpid(-1, 0, WNOHANG) > 0);
 #endif
 #endif
-		/* 500ms (used to be 10ms) - it shouldn't really matter since
+
+/* 500ms (used to be 10ms) - it shouldn't really matter since
 		   it's ok for us to sleep -- the timeout will only influence
 		   how often we collect terminated children and (maybe) how
 		   quickly we react to shutdown */
 		timv.tv_sec=0; timv.tv_usec=500000;
 		FD_ZERO(&readfds);
 		FD_SET(ss, &readfds);
-                FD_SET(cs, &readfds);
+        FD_SET(cs, &readfds);
 #ifdef unix
 		if (children) {
 			child_process_t *cp = children;
@@ -3175,7 +3241,7 @@ SOCKET cs;
 		}
 		selRet = select(maxfd + 1, &readfds, 0, 0, &timv);
 #else
-                selRet = select(maxfd + 1, &readfds, 0, 0, NULL);
+        selRet = select(maxfd + 1, &readfds, 0, 0, NULL);
 #endif
         
 		if (selRet > 0 && FD_ISSET(ss,&readfds)) {
@@ -3192,11 +3258,21 @@ SOCKET cs;
 				sa->s=CF("accept",accept(ss,(SA*)&(sa->su),&al));
 			} else
 #endif
-				sa->s=CF("accept",(int)accept(ss,(SA*)&(sa->sa),&al));
+			sa->s=CF("accept",(int)accept(ss,(SA*)&(sa->sa),&al));
 			sa->ucix=UCIX++;
 			sa->ss=ss;
 #ifdef Win32
-			sa->n = nc;
+			m = WaitForSingleObject(ghMutex, INFINITE);
+			if (m == WAIT_OBJECT_0)
+			{
+				sa->n = nextAvailableChild();
+			}
+			else
+			{
+				printLastError();
+			}
+			ReleaseMutex(ghMutex);
+			
 #endif
 			/*
 			memset(sa->sk,0,16);
@@ -3327,7 +3403,7 @@ SOCKET cs;
 #endif
 		} else if (selRet > 0 && FD_ISSET(cs,&readfds)) {
 
-			printf("in cancel\n");
+			//printf("in cancel\n");
 			if (localonly && !localSocketName) {
 				connfd = accept(cs, (struct sockaddr*)NULL, NULL);
 				int allowed = getIpAddress(connfd);
@@ -3368,8 +3444,8 @@ extern int Rf_initEmbeddedR(int, char**);
 /* main function - start Rserve */
 int main(int argc, char **argv)
 {
-    int stat,i;    
-	rserve_rev[0]=0;
+	int stat, i;
+	rserve_rev[0] = 0;
 	int socket = 0;  //used only when launching Win32 child process via CreateProcess
 	struct args *sa; //used only when launching Win32 child process via CreateProcess
 
@@ -3381,7 +3457,10 @@ int main(int argc, char **argv)
 	/* Use the MAKEWORD(lowbyte, highbyte) macro declared in Windef.h */
 	wVersionRequested = MAKEWORD(2, 0);
 
+	ghMutex = CreateMutex(NULL, 0, NULL);
+
 	err = WSAStartup(wVersionRequested, &wsaData);
+
 #endif
 
 	{ /* cut out the SVN revision from the Id string */
@@ -3397,94 +3476,94 @@ int main(int argc, char **argv)
 		}
 	}
 #ifdef Win32
-// Enable R_Interactive for R exception handling XXX why is this necessary?
-    Rsrv_interactive = 1;
+	// Enable R_Interactive for R exception handling XXX why is this necessary?
+	Rsrv_interactive = 1;
 
 #endif
 
 #ifdef RSERV_DEBUG
-    printf("Rserve %d.%d-%d (%s) (C)Copyright 2002-2011 Simon Urbanek\n%s\n\n",RSRV_VER>>16,(RSRV_VER>>8)&255,RSRV_VER&255, rserve_rev, rserve_ver_id);
+	printf("Rserve %d.%d-%d (%s) (C)Copyright 2002-2011 Simon Urbanek\n%s\n\n", RSRV_VER >> 16, (RSRV_VER >> 8) & 255, RSRV_VER & 255, rserve_rev, rserve_ver_id);
 #endif
-    if (!isByteSexOk()) {
+	if (!isByteSexOk()) {
 		printf("FATAL ERROR: This program was not correctly compiled - the endianess is wrong!\nUse -DSWAPEND when compiling on PPC or similar platforms.\n");
 		return -100;
-    }
-    
-    loadConfig(CONFIG_FILE);
-    
-    /** copy argv while removing Rserve specific parameters */
-    top_argc=1;
-    top_argv=(char**) malloc(sizeof(char*)*(argc+1));
-    top_argv[0]=argv[0];
-    i=1;
-    while (i<argc) {
-		int isRSP=0;
-		if (argv[i] && *argv[i]=='-' && argv[i][1]=='-') {
-			if (!strcmp(argv[i]+2,"RS-port")) {
-				isRSP=1;
-				if (i+1==argc)
-					fprintf(stderr,"Missing port specification for --RS-port.\n");
+	}
+
+	loadConfig(CONFIG_FILE);
+
+	/** copy argv while removing Rserve specific parameters */
+	top_argc = 1;
+	top_argv = (char**)malloc(sizeof(char*)*(argc + 1));
+	top_argv[0] = argv[0];
+	i = 1;
+	while (i < argc) {
+		int isRSP = 0;
+		if (argv[i] && *argv[i] == '-' && argv[i][1] == '-') {
+			if (!strcmp(argv[i] + 2, "RS-port")) {
+				isRSP = 1;
+				if (i + 1 == argc)
+					fprintf(stderr, "Missing port specification for --RS-port.\n");
 				else {
-					port=satoi(argv[++i]);
-					if (port<1) {
-						fprintf(stderr,"Invalid port number in --RS-port, using default port.\n");
-						port=default_Rsrv_port;
+					port = satoi(argv[++i]);
+					if (port < 1) {
+						fprintf(stderr, "Invalid port number in --RS-port, using default port.\n");
+						port = default_Rsrv_port;
 					}
 				}
 			}
-			if (!strcmp(argv[i]+2,"RS-dumplimit")) {
-				isRSP=1;
-				if (i+1==argc)
-					fprintf(stderr,"Missing limit specification for --RS-dumplimit.\n");
-				else
-					dumpLimit=satoi(argv[++i]);
-			}
-			if (!strcmp(argv[i]+2,"RS-socket")) {
-				isRSP=1;
-				if (i+1==argc)
-					fprintf(stderr,"Missing socket specification for --RS-socket.\n");
-				else
-					localSocketName=argv[++i];
-			}
-			if (!strcmp(argv[i]+2, "RS-encoding")) {
+			if (!strcmp(argv[i] + 2, "RS-dumplimit")) {
 				isRSP = 1;
 				if (i + 1 == argc)
-					fprintf(stderr,"Missing socket specification for --RS-encoding.\n");
+					fprintf(stderr, "Missing limit specification for --RS-dumplimit.\n");
+				else
+					dumpLimit = satoi(argv[++i]);
+			}
+			if (!strcmp(argv[i] + 2, "RS-socket")) {
+				isRSP = 1;
+				if (i + 1 == argc)
+					fprintf(stderr, "Missing socket specification for --RS-socket.\n");
+				else
+					localSocketName = argv[++i];
+			}
+			if (!strcmp(argv[i] + 2, "RS-encoding")) {
+				isRSP = 1;
+				if (i + 1 == argc)
+					fprintf(stderr, "Missing socket specification for --RS-encoding.\n");
 				else
 					set_string_encoding(argv[++i], 1);
 			}
-			if (!strcmp(argv[i]+2,"RS-workdir")) {
-				isRSP=1;
-				if (i+1==argc)
-					fprintf(stderr,"Missing directory specification for --RS-workdir.\n");
+			if (!strcmp(argv[i] + 2, "RS-workdir")) {
+				isRSP = 1;
+				if (i + 1 == argc)
+					fprintf(stderr, "Missing directory specification for --RS-workdir.\n");
 				else
-					workdir=argv[++i];
+					workdir = argv[++i];
 			}
-			if (!strcmp(argv[i]+2,"RS-conf")) {
-				isRSP=1;
-				if (i+1==argc)
-					fprintf(stderr,"Missing config file specification for --RS-conf.\n");
+			if (!strcmp(argv[i] + 2, "RS-conf")) {
+				isRSP = 1;
+				if (i + 1 == argc)
+					fprintf(stderr, "Missing config file specification for --RS-conf.\n");
 				else
 					loadConfig(argv[++i]);
 			}
-			if (!strcmp(argv[i]+2,"RS-settings")) {
+			if (!strcmp(argv[i] + 2, "RS-settings")) {
 				printf("Rserve v%d.%d-%d\n\nconfig file: %s\nworking root: %s\nport: %d\nlocal socket: %s\nauthorization required: %s\nplain text password: %s\npasswords file: %s\nallow I/O: %s\nallow remote access: %s\ncontrol commands: %s\ninteractive: %s\nmax.input buffer size: %ld kB\n\n",
-					   RSRV_VER>>16, (RSRV_VER>>8)&255, RSRV_VER&255,
-					   CONFIG_FILE, workdir, port, localSocketName ? localSocketName : "[none, TCP/IP used]",
-					   authReq ? "yes" : "no", usePlain ? "allowed" : "not allowed", pwdfile ? pwdfile : "[none]",
-					   allowIO ? "yes" : "no", localonly ? "no" : "yes",
-					   child_control ? "yes" : "no", Rsrv_interactive ? "yes" : "no", maxInBuf / 1024L);
-				return 0;	       
+					RSRV_VER >> 16, (RSRV_VER >> 8) & 255, RSRV_VER & 255,
+					CONFIG_FILE, workdir, port, localSocketName ? localSocketName : "[none, TCP/IP used]",
+					authReq ? "yes" : "no", usePlain ? "allowed" : "not allowed", pwdfile ? pwdfile : "[none]",
+					allowIO ? "yes" : "no", localonly ? "no" : "yes",
+					child_control ? "yes" : "no", Rsrv_interactive ? "yes" : "no", maxInBuf / 1024L);
+				return 0;
 			}
-			if (!strcmp(argv[i]+2,"RS-maxclients")) {
-				isRSP=1;
-				if (i+1==argc)
-					fprintf(stderr,"Missing limit specification for --RS-maxclients.\n");
+			if (!strcmp(argv[i] + 2, "RS-maxclients")) {
+				isRSP = 1;
+				if (i + 1 == argc)
+					fprintf(stderr, "Missing limit specification for --RS-maxclients.\n");
 				else
-					MAX_CLIENTS=satoi(argv[++i]);
+					MAX_CLIENTS = satoi(argv[++i]);
 			}
 			//used only when launching Win32 child process via CreateProcess 
-			if (!strcmp(argv[i]+2,"win32child")) {
+			if (!strcmp(argv[i] + 2, "win32child")) {
 				iWin32Child = 1;
 				if (i + 1 == argc)
 				{
@@ -3515,19 +3594,20 @@ int main(int argc, char **argv)
 						return -1;
 					}
 					socket = socket_duplicate;
+
 #endif
 				}
 			}
-			if (!strcmp(argv[i]+2,"ppid")) {
-				if (i+1==argc)
-					fprintf(stderr,"Missing parent PID specification for --ppid.\n");
+			if (!strcmp(argv[i] + 2, "ppid")) {
+				if (i + 1 == argc)
+					fprintf(stderr, "Missing parent PID specification for --ppid.\n");
 				else
 					parentPID = atoi(argv[++i]);
 			}
-			if (!strcmp(argv[i]+2,"version")) {
-				printf("Rserve v%d.%d-%d (%s)\n",RSRV_VER>>16,(RSRV_VER>>8)&255,RSRV_VER&255,rserve_rev);
+			if (!strcmp(argv[i] + 2, "version")) {
+				printf("Rserve v%d.%d-%d (%s)\n", RSRV_VER >> 16, (RSRV_VER >> 8) & 255, RSRV_VER & 255, rserve_rev);
 			}
-			if (!strcmp(argv[i]+2,"help")) {
+			if (!strcmp(argv[i] + 2, "help")) {
 				printf("Usage: R CMD Rserve [<options>]\n\nOptions: --help  this help screen\n --version  prints Rserve version (also passed to R)\n --RS-port <port> listen on the specified TCP port\n --RS-socket <socket> use specified local (unix) socket instead of TCP/IP.\n --RS-workdir <path> use specified working directory root for connections.\n --RS-encoding <enc> set default server string encoding to <enc>.\n --RS-conf <file> load additional config file.\n --RS-settings  dumps current settings of the Rserve\n\nAll other options are passed to the R engine.\n\n");
 #ifdef RSERV_DEBUG
 				printf("debugging flag:\n --RS-dumplimit <number>  sets limit of items/bytes to dump in debugging output. set to 0 for unlimited\n\n");
@@ -3536,34 +3616,34 @@ int main(int argc, char **argv)
 			}
 		}
 		if (!isRSP)
-			top_argv[top_argc++]=argv[i];
+			top_argv[top_argc++] = argv[i];
 		i++;
-    }
+	}
 
 #ifdef Win32
-// Allocate and initialize housekeeping arrays.
-  winSocks = (SOCKET *)malloc(MAX_CLIENTS * sizeof(SOCKET));
-  winPI = (PROCESS_INFORMATION *)malloc(MAX_CLIENTS * sizeof(PROCESS_INFORMATION));
-// Initialize worker pool
-    for (i = 0; i < MAX_CLIENTS; ++i)
-      {
-        winSocks[i] = INVALID_SOCKET;
+	// Allocate and initialize housekeeping arrays.
+	winSocks = (SOCKET *)malloc(MAX_CLIENTS * sizeof(SOCKET));
+	winPI = (PROCESS_INFORMATION *)malloc(MAX_CLIENTS * sizeof(PROCESS_INFORMATION));
+	// Initialize worker pool
+	for (i = 0; i < MAX_CLIENTS; ++i)
+	{
+		winSocks[i] = INVALID_SOCKET;
 		winPI[i].hProcess = 0;
 	}
 
 	if (SetConsoleCtrlHandler(
-			(PHANDLER_ROUTINE)ConsoleHandler,TRUE)==FALSE)
-	  {
-			// unable to install handler... 
-			// display message to the user
-	  }
+		(PHANDLER_ROUTINE)ConsoleHandler, TRUE) == FALSE)
+	{
+		// unable to install handler... 
+		// display message to the user
+	}
 
 #endif
 
 	//when we spawn a Win32 child process, we need to also pass the commandline params that were sent to the parent
 	//hold them here.
-	memset(win32ChildCmdLine,'\0', 1024);
-	for(i = 1; i < argc; i++) {
+	memset(win32ChildCmdLine, '\0', 1024);
+	for (i = 1; i < argc; i++) {
 #ifdef Win32
 		strcat_s(win32ChildCmdLine, 1024, " ");
 		strcat_s(win32ChildCmdLine, 1024, argv[i]);
@@ -3577,14 +3657,15 @@ int main(int argc, char **argv)
 	R_SignalHandlers = 0; /* disable signal handlers */
 #endif
 
-    stat=Rf_initEmbeddedR(top_argc,top_argv);
-    if (stat<0) {
-		printf("Failed to initialize embedded R! (stat=%d)\n",stat);
+	stat = Rf_initEmbeddedR(top_argc, top_argv);
+	if (stat < 0) {
+		printf("Failed to initialize embedded R! (stat=%d)\n", stat);
 		return -1;
-    }
+	}
 #ifndef WIN32
-    /* windows uses this in init, unix doesn't so we set it here */
-    R_Interactive = Rsrv_interactive;
+	/* windows uses this in init, unix doesn't so we set it here */
+	R_Interactive = Rsrv_interactive;
+
 #endif
 
     if (src_list) { /* do any sourcing if necessary */
@@ -3675,3 +3756,11 @@ int main(int argc, char **argv)
 /* tab-width: 4 */
 /* c-basic-offset: 4 */
 /* End: */
+
+
+
+
+
+
+
+
