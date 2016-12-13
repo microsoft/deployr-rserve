@@ -859,7 +859,7 @@ static unsigned int* storeSEXP(unsigned int* buf, SEXP x, rlen_t storage_size) {
 			} else if ((unsigned char) cv[0] == NaStringRepresentation[0]) /* we will double the leading 0xff to avoid abiguity between NA and "\0xff" */
 				(st++)[0] = (char) NaStringRepresentation[0];
 #ifdef Win32
-			strcpy_s(st, inBuf + 8, cv);
+			strcpy_s(st, strlen(cv) + 1, cv);
 #else
 			strcpy(st, cv);
 #endif
@@ -917,7 +917,7 @@ static unsigned int* storeSEXP(unsigned int* buf, SEXP x, rlen_t storage_size) {
 		buf++;
 		attrFixup;
 #ifdef Win32
-		strcpy_s((char*)buf, inBuf + 8, val);
+		strcpy_s((char*)buf, strlen(val) + 1, val);
 #else
 		strcpy((char*)buf, val);
 #endif
@@ -2186,7 +2186,7 @@ decl_sbthread newConn(void *thp) {
 #endif
     
 #ifdef Win32
-	strcpy_s(buf, inBuf + 8, IDstring);
+	strcpy_s(buf, strlen(IDstring) + 1, IDstring);
 #else
 	strcpy(buf,IDstring);
 #endif
