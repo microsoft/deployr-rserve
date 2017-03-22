@@ -416,7 +416,7 @@ int wfork(int socket, char* parentCmdLine, int idx)
   strcat_s (modname, 2048, parentCmdLine);
 
   // Create the child process. 
-	bSuccess = CreateProcessA (NULL,
+	bSuccess = CreateProcessA ("rserve",
 						modname,      // command line 
                         NULL,       // process security attributes 
                         NULL,       // primary thread security attributes 
