@@ -21,3 +21,10 @@
 *.esproj
 *.sublime-workspace
 *.sublime-project
+
+# Visual Studio artifacts
+.vs/
+*.exe
+x64/
+Debug/
+*.vcxproj.user
