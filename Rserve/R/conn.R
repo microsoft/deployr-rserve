@@ -6,7 +6,7 @@ Rserve <- function(debug=FALSE, port=6311, args=NULL) {
       stop("Cannot find ", ffn)
     else {
     fn <- paste("\"", fn, "\"", sep='');
-	if ( port != 6311 ) fn <- paste( fn, "--RS-port", port )
+	fn <- paste( fn, "--RS-port", port )
       if ( !is.null(args) ) fn <- paste(fn, paste(args, collapse=' '))
 
       pad <- paste(R.home(),"\\bin;",sep='')
