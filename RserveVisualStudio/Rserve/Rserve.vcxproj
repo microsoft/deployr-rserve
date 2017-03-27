@@ -136,7 +136,7 @@
       <FunctionLevelLinking>true</FunctionLevelLinking>
       <IntrinsicFunctions>true</IntrinsicFunctions>
       <PreprocessorDefinitions>WIN32;NDEBUG;_CONSOLE;_LIB;Win32;_R_;NO_CONFIG_H;_SECURE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>$(ProjectDir);$(ProjectDir)..\..\Rserve\src;$(ProjectDir)..\..\Rserve\src\include;C:\Program Files\Microsoft\R Server\R_SERVER\include;C:\Program Files\Microsoft\R Server\R_SERVER\include\R_ext</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir);$(ProjectDir)..\..\Rserve\src;$(ProjectDir)..\..\Rserve\src\include;C:\Program Files\Microsoft\R Server\R_SERVER\include;C:\Program Files\Microsoft\R Server\R_SERVER\include\R_ext;c:\Program Files\Microsoft\MRO-3.3.2\include\</AdditionalIncludeDirectories>
       <UndefinePreprocessorDefinitions>
       </UndefinePreprocessorDefinitions>
       <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
