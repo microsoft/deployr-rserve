@@ -294,12 +294,15 @@ extern __declspec(dllimport) int R_SignalHandlers;
 #define RS_ParseVector(A,B,C) R_ParseVector(A,B,C,R_NilValue)
 #endif
 
+
 /* child control commands */
 #define CCTL_EVAL     1 /* data: string */
 #define CCTL_SOURCE   2 /* data: string */
 #define CCTL_SHUTDOWN 3 /* - */
 
 #define MAX_CTRL_DATA (1024*1024) /* max. length of data for control commands - larger data will be ignored */
+
+#include <time.h> 
 
 int dumpLimit=128;
 int pid = 0;
@@ -310,6 +313,7 @@ static int cancelPort = default_Rsrv_port + 1;
 static int active = 1; /* 1=server loop is active, 0=shutdown */
 static int UCIX   = 1; /* unique connection index */
 static int maxlistenq = LISTENQ;
+FILE *gLogFile = NULL;
 
 static char *localSocketName = 0; /* if set listen on this local (unix) socket instead of TCP/IP */
 static int localSocketMode = 0;   /* if set, chmod is used on the socket when created */
@@ -318,6 +322,7 @@ static int allowIO=1;  /* 1=allow I/O commands, 0=don't */
 
 static char **top_argv;
 static int top_argc;
+
 
 int MAX_CLIENTS = DEFAULT_MAX_CLIENTS;
 #ifndef Win32
@@ -332,6 +337,79 @@ SOCKET *winSocks;
 #ifdef Win32
 HANDLE ghMutex = NULL;
 #endif
+
+// Returns the local date/time formatted as 2014-03-19 11:11:52
+char* getFormattedTime(void) {
+
+	time_t rawtime;
+	struct tm timeinfo;
+
+	time(&rawtime);
+	localtime_s(&timeinfo, &rawtime);
+
+	// Must be static, otherwise won't work
+	static char _retval[20];
+	strftime(_retval, sizeof(_retval), "%Y-%m-%d %H:%M:%S", &timeinfo);
+
+	return _retval;
+}
+
+void getPath(char* szPath)
+{
+	char *ptr = szPath;
+	char *prevptr = "";
+
+	while ((ptr = strstr(ptr, "\\")))
+	{
+		prevptr = ptr++;
+	}
+
+	int i = strlen(szPath) - strlen(prevptr);
+
+	if (i > 0)
+	{
+		strncpy_s(szPath, 2048, szPath, i);
+		szPath[i] = '\0';
+	}
+}
+
+// Remove path from filename
+#define __SHORT_FILE__ (strrchr(__FILE__, '/') ? strrchr(__FILE__, '/') + 1 : __FILE__)
+
+// Main log macro
+#define __LOG__(format, loglevel, ...) if(gLogFile != NULL){fprintf(gLogFile, "%s %-5s [%s] [%s:%d] " format , getFormattedTime(), loglevel, __func__, __SHORT_FILE__, __LINE__, ## __VA_ARGS__);fflush(gLogFile);}
+
+// Specific log macros with 
+#define LOGDEBUG(format, ...) __LOG__(format, "DEBUG", ## __VA_ARGS__)
+#define LOGWARN(format, ...) __LOG__(format, "WARN", ## __VA_ARGS__)
+#define LOGERROR(format, ...) __LOG__(format, "ERROR", ## __VA_ARGS__)
+#define LOGINFO(format, ...) __LOG__(format, "INFO", ## __VA_ARGS__)
+
+void openLogFile(void)
+{
+	if (gLogFile != NULL)
+	{
+		return;
+	}
+	char szLogFile[2048];
+	strcpy_s(szLogFile, 2048, workdir);
+	getPath(szLogFile);
+	strcat_s(szLogFile, 2048, "/RServe.log");
+
+	gLogFile = _fsopen(szLogFile, "a+", _SH_DENYNO);
+}
+
+void closeLogFile(void)
+{
+	/* flush output so it goes to our file */
+	if (gLogFile != NULL)
+	{
+		fflush(stdout);
+		fclose(gLogFile);
+	}
+	gLogFile = NULL;
+
+}
 
 /* Unfortunately, Windows client socket connections must be closed by the
  * process that created them--unlike Unix, the child process can't
@@ -369,7 +447,7 @@ void printLastError()
 		0,
 		NULL);
 
-	printf("%s\n", strErrorMessage);
+	LOGERROR("%s\n", strErrorMessage);
 
 }
 int wfork(int socket, char* parentCmdLine, int idx)
@@ -416,7 +494,7 @@ int wfork(int socket, char* parentCmdLine, int idx)
   strcat_s (modname, 2048, parentCmdLine);
 
   // Create the child process. 
-	bSuccess = CreateProcessA ("rserve",
+	bSuccess = CreateProcessA (NULL,
 						modname,      // command line 
                         NULL,       // process security attributes 
                         NULL,       // primary thread security attributes 
@@ -438,10 +516,10 @@ int wfork(int socket, char* parentCmdLine, int idx)
 	// If an error occurs, exit the application. 
 	if (!bSuccess)
 	{
-		printf ("CreateProcess Failed.\n");
+		LOGERROR ("CreateProcess Failed.\n");
 		return -1;
 	}
-	printf("create handles... Process = %d Thread = %d \n", (int)winPI[idx].hProcess, (int)winPI[idx].hThread);
+	LOGINFO("create handles... Process = %d Thread = %d \n", (int)winPI[idx].hProcess, (int)winPI[idx].hThread);
 
 	return (int)(winPI[idx]).hProcess;
 }
@@ -563,13 +641,13 @@ static int set_string_encoding(const char *enc, int verbose) {
 	else if (!strcmp(enc, "utf8")) string_encoding = CE_UTF8;
 	else {
 		if (verbose)
-			fprintf(stderr, "WARNING: invalid encoding value '%s' - muse be one of 'native', 'latin1' or 'utf8'.\n", enc);
+			LOGERROR("WARNING: invalid encoding value '%s' - muse be one of 'native', 'latin1' or 'utf8'.\n", enc);
 		return 0;
 	}
 	return 1;
 #else
 	if (verbose)
-		fprintf(stderr, "WARNING: 'encoding' defined but this Rserve has no encoding support.\n");
+		LOGERROR("WARNING: 'encoding' defined but this Rserve has no encoding support.\n");
 	return 0;
 #endif
 }
@@ -589,13 +667,13 @@ static int satoi(const char *str) {
 #ifdef RSERV_DEBUG
 static void printDump(void *b, int len) {
     int i=0;
-    if (len<1) { printf("DUMP FAILED (len=%d)\n",len); };
-    printf("DUMP [%d]:",len);
+    if (len<1) { LOGDEBUG("DUMP FAILED (len=%d)\n",len); };
+    LOGDEBUG("DUMP [%d]:\n",len);
     while(i<len) {
-		printf(" %02x",((unsigned char*)b)[i++]);
-		if(dumpLimit && i>dumpLimit) { printf(" ..."); break; };
+		LOGDEBUG(" %02x\n",((unsigned char*)b)[i++]);
+		if(dumpLimit && i>dumpLimit) { LOGDEBUG(" ...\n"); break; };
     }
-    printf("\n");
+    LOGDEBUG("\n");
 }
 #endif
 
@@ -604,7 +682,7 @@ static void sendResp(int s, int rsp) {
     memset(&ph, 0, sizeof(ph));
     ph.cmd = itop(rsp | CMD_RESP);
 #ifdef RSERV_DEBUG
-    printf("OUT.sendResp(void data)\n");
+    LOGDEBUG("OUT.sendResp(void data)\n");
     printDump(&ph, sizeof(ph));
 #endif
     send(s, (char*)&ph, sizeof(ph), 0);
@@ -633,7 +711,7 @@ static rlen_t getStorageSize(SEXP x) {
     rlen_t len = 4;
     
 #ifdef RSERV_DEBUG
-    printf("getStorageSize(%p,type=%d,len=%ld) ", (void*)x, t, tl);
+    LOGDEBUG("getStorageSize(%p,type=%d,len=%ld) \n", (void*)x, t, tl);
 #endif
     if (t != CHARSXP && TYPEOF(ATTRIB(x)) == LISTSXP) {
 		rlen_t alen = getStorageSize(ATTRIB(x));
@@ -712,7 +790,7 @@ static rlen_t getStorageSize(SEXP x) {
     if (len > 0xfffff0) /* large types must be stored in the new format */
 		len += 4L;
 #ifdef RSERV_DEBUG
-    printf("= %lu\n", len);
+    LOGDEBUG("= %lu\n", len);
 #endif
     return len;
 }
@@ -943,7 +1021,7 @@ static unsigned int* storeSEXP(unsigned int* buf, SEXP x, rlen_t storage_size) {
 		*preBuf = itop(SET_PAR(PAR_TYPE(ptoi(*preBuf)), dist(preBuf, buf)));
 
 #ifdef RSERV_DEBUG
-	printf("stored %p at %p, %lu bytes\n", (void*)x, (void*)preBuf, (unsigned long) dist(preBuf, buf));
+	LOGDEBUG("stored %p at %p, %lu bytes\n", (void*)x, (void*)preBuf, (unsigned long) dist(preBuf, buf));
 #endif
 
     return buf;
@@ -957,23 +1035,23 @@ static void printSEXP(SEXP e) /* merely for debugging purposes
     int i = 0;
 
 	if (TYPEOF(ATTRIB(e)) == LISTSXP)
-		printf("[*has attr*] ");
+		LOGDEBUG("[*has attr*] \n");
     
     if (t==NILSXP) {
-		printf("NULL value\n");
+		LOGDEBUG("NULL value\n");
 		return;
     }
     if (t==LANGSXP) {
-		printf("language construct\n");
+		LOGDEBUG("language construct\n");
 		return;
     }
     if (t==LISTSXP) {
 		SEXP l = e;
-		printf("dotted-pair list:\n");
+		LOGDEBUG("dotted-pair list:\n");
 		while (l != R_NilValue) {
-			if (dumpLimit && i>dumpLimit) { printf("..."); break; };
+			if (dumpLimit && i>dumpLimit) { LOGDEBUG("...\n"); break; };
 			if (TAG(l) != R_NilValue) {
-				printf("(TAG:"); printSEXP(TAG(l)); printf(") ");
+				LOGDEBUG("(TAG:\n"); printSEXP(TAG(l)); LOGDEBUG(") \n");
 			}
 			printSEXP(CAR(l));
 			l=CDR(l);
@@ -982,43 +1060,43 @@ static void printSEXP(SEXP e) /* merely for debugging purposes
     }
     if (t==REALSXP) {
 		if (LENGTH(e)>1) {
-			printf("Vector of real variables: ");
+			LOGDEBUG("Vector of real variables: \n");
 			while(i<LENGTH(e)) {
-				printf("%f",REAL(e)[i]);
-				if (i<LENGTH(e)-1) printf(", ");
+				LOGDEBUG("%f\n",REAL(e)[i]);
+				if (i<LENGTH(e)-1) LOGDEBUG(", \n");
 				if (dumpLimit && i>dumpLimit) {
-					printf("..."); break;
+					LOGDEBUG("...\n"); break;
 				}
 				i++;
 			}
 			putchar('\n');
 		} else
-			printf("Real variable %f\n",*REAL(e));
+			LOGDEBUG("Real variable %f\n",*REAL(e));
 		return;
     }
     if (t==CPLXSXP) {
 		if (LENGTH(e)>1) {
-			printf("Vector of complex variables: ");
+			LOGDEBUG("Vector of complex variables: \n");
 			while(i<LENGTH(e)) {
-				printf("%f+%fi",COMPLEX(e)[i].r,COMPLEX(e)[i].i);
-				if (i<LENGTH(e)-1) printf(", ");
+				LOGDEBUG("%f+%fi\n",COMPLEX(e)[i].r,COMPLEX(e)[i].i);
+				if (i<LENGTH(e)-1) LOGDEBUG(", \n");
 				if (dumpLimit && i>dumpLimit) {
-					printf("..."); break;
+					LOGDEBUG("...\n"); break;
 				}
 				i++;
 			}
 			putchar('\n');
 		} else
-			printf("Complex variable %f+%fi\n",COMPLEX(e)[0].r,COMPLEX(e)[0].i);
+			LOGDEBUG("Complex variable %f+%fi\n",COMPLEX(e)[0].r,COMPLEX(e)[0].i);
 		return;
     }
     if (t==RAWSXP) {
-		printf("Raw vector: ");
+		LOGDEBUG("Raw vector: \n");
 		while(i<LENGTH(e)) {
-			printf("%02x",((unsigned int)((unsigned char*)RAW(e))[i])&0xff);
-			if (i<LENGTH(e)-1) printf(" ");
+			LOGDEBUG("%02x\n",((unsigned int)((unsigned char*)RAW(e))[i])&0xff);
+			if (i<LENGTH(e)-1) LOGDEBUG(" \n");
 			if (dumpLimit && i>dumpLimit) {
-				printf("..."); break;
+				LOGDEBUG("...\n"); break;
 			}
 			i++;
 		}
@@ -1026,55 +1104,55 @@ static void printSEXP(SEXP e) /* merely for debugging purposes
 		return;
     }
     if (t==EXPRSXP) {
-		printf("Vector of %d expressions:\n",LENGTH(e));
+		LOGDEBUG("Vector of %d expressions:\n",LENGTH(e));
 		while(i<LENGTH(e)) {
-			if (dumpLimit && i>dumpLimit) { printf("..."); break; };
+			if (dumpLimit && i>dumpLimit) { LOGDEBUG("...\n"); break; };
 			printSEXP(VECTOR_ELT(e,i));
 			i++;
 		}
 		return;
     }
     if (t==INTSXP) {
-		printf("Vector of %d integers:\n",LENGTH(e));
+		LOGDEBUG("Vector of %d integers:\n",LENGTH(e));
 		while(i<LENGTH(e)) {
-			if (dumpLimit && i>dumpLimit) { printf("..."); break; }
-			printf("%d",INTEGER(e)[i]);
-			if (i<LENGTH(e)-1) printf(", ");
+			if (dumpLimit && i>dumpLimit) { LOGDEBUG("...\n"); break; }
+			LOGDEBUG("%d\n",INTEGER(e)[i]);
+			if (i<LENGTH(e)-1) LOGDEBUG(", \n");
 			i++;
 		}
 		putchar('\n');
 		return;
     }
     if (t==VECSXP) {
-		printf("Vector of %d fields:\n",LENGTH(e));
+		LOGDEBUG("Vector of %d fields:\n",LENGTH(e));
 		while(i<LENGTH(e)) {
-			if (dumpLimit && i>dumpLimit) { printf("..."); break; };
+			if (dumpLimit && i>dumpLimit) { LOGDEBUG("...\n"); break; };
 			printSEXP(VECTOR_ELT(e,i));
 			i++;
 		}
 		return;
     }
     if (t==STRSXP) {
-		printf("String vector of length %d:\n",LENGTH(e));
+		LOGDEBUG("String vector of length %d:\n",LENGTH(e));
 		while(i<LENGTH(e)) {
-			if (dumpLimit && i>dumpLimit) { printf("..."); break; };
+			if (dumpLimit && i>dumpLimit) { LOGDEBUG("...\n"); break; };
 			printSEXP(VECTOR_ELT(e,i)); i++;
 		}
 		return;
     }
     if (t==CHARSXP) {
-		printf("scalar string: \"%s\"\n", CHAR(e));
+		LOGDEBUG("scalar string: \"%s\"\n", CHAR(e));
 		return;
     }
     if (t==SYMSXP) {
-		printf("Symbol, name: "); printSEXP(PRINTNAME(e));
+		LOGDEBUG("Symbol, name: \n"); printSEXP(PRINTNAME(e));
 		return;
     }
     if (t==S4SXP) {
-		printf("S4 object\n");
+		LOGDEBUG("S4 object\n");
 		return;
     }
-    printf("Unknown type: %d\n",t);
+    LOGDEBUG("Unknown type: %d\n",t);
 }
 
 /* decode_toSEXP is used to decode SEXPs from binary form and create
@@ -1097,21 +1175,21 @@ static SEXP decode_to_SEXP(unsigned int **buf, int *UPC)
 		ln |= ((rlen_t) (unsigned int) ptoi(*b)) << 24;
     }
 #ifdef RSERV_DEBUG
-    printf("decode: type=%d, len=%ld\n", ty, (long)ln);
+    LOGDEBUG("decode: type=%d, len=%ld\n", ty, (long)ln);
 #endif
     b++;
     pab = b; /* pre-attr b */
 
 	if (ty & XT_HAS_ATTR) {
 #ifdef RSERV_DEBUG
-		printf(" - has attributes\n");
+		LOGDEBUG(" - has attributes\n");
 #endif
 		*buf = b;
 		vatt = decode_to_SEXP(buf, UPC);
 		b = *buf;
 		ty = ty ^ XT_HAS_ATTR;
 #ifdef RSERV_DEBUG
-		printf(" - returned from attributes(@%p)\n", (void*)*buf);
+		LOGDEBUG(" - returned from attributes(@%p)\n", (void*)*buf);
 #endif
 		ln -= (rlen_t)(((char*)b) - ((char*)pab)); /* adjust length */
 	}
@@ -1242,7 +1320,7 @@ static SEXP decode_to_SEXP(unsigned int **buf, int *UPC)
 				n++;
 			}
 #ifdef RSERV_DEBUG
-			printf(" vector (%s), %d elements\n", (ty==XT_VECTOR)?"generic":((ty==XT_VECTOR_EXP)?"expression":"string"), n);
+			LOGDEBUG(" vector (%s), %d elements\n", (ty==XT_VECTOR)?"generic":((ty==XT_VECTOR_EXP)?"expression":"string"), n);
 #endif
 			val = allocVector((ty==XT_VECTOR) ? VECSXP : ((ty == XT_VECTOR_EXP) ? EXPRSXP : STRSXP), n);
 			PROTECT(val);
@@ -1252,7 +1330,7 @@ static SEXP decode_to_SEXP(unsigned int **buf, int *UPC)
 				lh = CDR(lh);
 			}
 #ifdef RSERV_DEBUG
-			printf(" end of vector %lx/%lx\n", (long) *buf, (long) ie);
+			LOGDEBUG(" end of vector %lx/%lx\n", (long) *buf, (long) ie);
 #endif
 			UNPROTECT(2); /* val and vr */
 			PROTECT(val);
@@ -1265,7 +1343,7 @@ static SEXP decode_to_SEXP(unsigned int **buf, int *UPC)
 		/* i=ptoi(*b);
 		   b++; */
 #ifdef RSERV_DEBUG
-		printf(" string/symbol(%d) '%s'\n", ty, (char*)b);
+		LOGDEBUG(" string/symbol(%d) '%s'\n", ty, (char*)b);
 #endif
 		{
 			char *c = (char*) b;
@@ -1297,13 +1375,13 @@ static SEXP decode_to_SEXP(unsigned int **buf, int *UPC)
 			while ((unsigned char*)*buf < ie) {
 				int my_upc = 0;
 #ifdef RSERV_DEBUG
-				printf(" el %08lx of %08lx\n", (unsigned long)*buf, (unsigned long) ie);
+				LOGDEBUG(" el %08lx of %08lx\n", (unsigned long)*buf, (unsigned long) ie);
 #endif
 				SEXP el = decode_to_SEXP(buf, &my_upc);
 				SEXP ea = 0;
 				if (ty==XT_LANG_TAG || ty==XT_LIST_TAG) {
 #ifdef RSERV_DEBUG
-					printf(" tag %08lx of %08lx\n", (unsigned long)*buf, (unsigned long) ie);
+					LOGDEBUG(" tag %08lx of %08lx\n", (unsigned long)*buf, (unsigned long) ie);
 #endif
 					ea = decode_to_SEXP(buf, &my_upc);
 				}
@@ -1395,9 +1473,9 @@ static void sendRespData(int s, int rsp, rlen_t len, void *buf) {
 	ph.res = itop(len >> 32);
 #endif
 #ifdef RSERV_DEBUG
-    printf("OUT.sendRespData\nHEAD ");
+    LOGDEBUG("OUT.sendRespData HEAD ");
     printDump(&ph,sizeof(ph));
-    printf("BODY ");
+    LOGDEBUG("BODY \n");
     printDump(buf,len);
 #endif
     
@@ -1475,9 +1553,11 @@ static int loadConfig(char *fn)
 	FILE *f = NULL;
 	char buf[512];
 	char *c,*p,*c1;
+
+
     
 #ifdef RSERV_DEBUG
-	printf("Loading config file %s\n",fn);
+	LOGDEBUG("Loading config file %s\n",fn);
 #endif
 #ifdef Win32
 	fopen_s(&f,fn,"r");
@@ -1486,7 +1566,7 @@ static int loadConfig(char *fn)
 #endif
 	if (!f) {
 #ifdef RSERV_DEBUG
-		printf("Failed to find config file %s\n",fn);
+		LOGDEBUG("Failed to find config file %s\n",fn);
 #endif
 		return -1;
 	}
@@ -1509,7 +1589,7 @@ static int loadConfig(char *fn)
 				if(*c1 == '\n' || *c1 == '\r') *c1 = 0; else c1++;
 
 #ifdef RSERV_DEBUG
-			printf("conf> command=\"%s\", parameter=\"%s\"\n", c, p);
+			LOGDEBUG("conf> command=\"%s\", parameter=\"%s\"\n", c, p);
 #endif
 			if (!strcmp(c,"remote"))
 				localonly = (*p == '1' || *p == 'y' || *p == 'e') ? 0 : 1;
@@ -1543,7 +1623,7 @@ static int loadConfig(char *fn)
 
 			if (!strcmp(c,"source") || !strcmp(c,"eval")) {
 #ifdef RSERV_DEBUG
-				printf("Found source entry \"%s\"\n", p);
+				LOGDEBUG("Found source entry \"%s\"\n", p);
 #endif
 				if (*p) {
 					struct source_entry* se= (struct source_entry*) malloc(sizeof(struct source_entry)+strlen(p)+16);
@@ -1586,22 +1666,22 @@ static int loadConfig(char *fn)
 				if (*p == 'n') su_time = SU_NOW;
 				else if (*p == 's') su_time = SU_SERVER;
 				else if (*p == 'c') su_time = SU_CLIENT;
-				else fprintf(stderr, "su value invalid - must be 'now', 'server' or 'client'.\n");
+				else LOGERROR("su value invalid - must be 'now', 'server' or 'client'.\n");
 			}
 			if (!strcmp(c,"uid") && *p) {
 				new_uid = satoi(p);
 				if (su_time == SU_NOW && setuid(new_uid))
-					fprintf(stderr, "setuid(%d): failed. no user switch performed.\n", new_uid);
+					LOGERROR("setuid(%d): failed. no user switch performed.\n", new_uid);
 			}
 			if (!strcmp(c,"gid") && *p) {
 				new_gid = satoi(p);
 				if (su_time == SU_NOW && setgid(new_gid))
-					fprintf(stderr, "setgid(%d): failed. no group switch performed.\n", new_gid);
+					LOGERROR("setgid(%d): failed. no group switch performed.\n", new_gid);
 			}
 			if (!strcmp(c,"chroot") && *p) {
 				if (chroot(p)) {
 					perror("chroot");
-					fprintf(stderr,"chroot(\"%s\"): failed.\n", p);
+					LOGERROR("chroot(\"%s\"): failed.\n", p);
 				}
 			}
 			if (!strcmp(c,"umask") && *p)
@@ -1615,13 +1695,14 @@ static int loadConfig(char *fn)
 				}
 				l = allowed_ips;
 				while (*l) l++;
-				if (l - allowed_ips >= 127)
-					fprintf(stderr, "WARNING: Maximum of allowed IPs (127) exceeded, ignoring 'allow %s'\n", p);
-					else {
-						*l = _strdup(p);
-						l++;
-						*l = 0;
-					}
+				if (l - allowed_ips >= 127) {
+					LOGERROR("WARNING: Maximum of allowed IPs (127) exceeded, ignoring 'allow %s'\n", p);
+				}
+				else {
+					*l = _strdup(p);
+					l++;
+					*l = 0;
+				}
 			}
 			if (!strcmp(c, "control") && (p[0] == 'e' || p[0] == 'y' || p[1] == '1'))
 				child_control = 1;
@@ -1647,14 +1728,15 @@ static int loadConfig(char *fn)
 				cache_pwd = (*p == 'i') ? 2 : ((*p == '1' || *p == 'y' || *p == 'e') ? 1 : 0);
 		}
     fclose(f);
+	openLogFile();
 #ifndef HAS_CRYPT
     if (!usePlain) {
-		fprintf(stderr,"Warning: useplain=no, but this Rserve has no crypt support!\nSet useplain=yes or compile with crypt support (if your system supports crypt).\nFalling back to plain text password.\n");
+		LOGERROR("Warning: useplain=no, but this Rserve has no crypt support! Set useplain=yes or compile with crypt support (if your system supports crypt). Falling back to plain text password.\n");
 		usePlain=1;
     }
 #endif
 #ifdef RSERV_DEBUG
-    printf("Loaded config file %s\n",fn);
+    LOGDEBUG("Loaded config file %s\n",fn);
 #endif
 
 	if (cache_pwd == 2) load_pwd_cache();
@@ -1676,7 +1758,7 @@ static void sigHandler(int i) {
 
 #ifdef RSERV_DEBUG
 static void brkHandler(int i) {
-    printf("\nCaught break signal, shutting down Rserve.\n");
+    LOGDEBUG("\nCaught break signal, shutting down Rserve.\n");
     active=0;
     /* kill(getpid(), SIGUSR1); */
 }
@@ -1685,7 +1767,7 @@ static void brkHandler(int i) {
 #ifdef unix
 void cancelHandler(int i) {
 #ifdef RSERV_DEBUG
-    printf("Caught break signal in child\n");
+    LOGDEBUG("Caught break signal in child\n");
 #endif
     R_interrupts_pending = 1;
 //    kill(pid, SIGINT);
@@ -1741,11 +1823,13 @@ void voidEval(char *cmd) {
     
     PROTECT(xp);
 #ifdef RSERV_DEBUG
-    printf("voidEval: buffer parsed, stat=%d, parts=%d\n",stat,j);
-    if (xp)
-		printf("result type: %d, length: %d\n",TYPEOF(xp),LENGTH(xp));
-    else
-		printf("result is <null>\n");
+    LOGDEBUG("voidEval: buffer parsed, stat=%d, parts=%d\n",stat,j);
+	if (xp) {
+		LOGDEBUG("result type: %d, length: %d\n", TYPEOF(xp), LENGTH(xp));
+	}
+	else {
+		LOGDEBUG("result is <null>\n");
+	}
 #endif
     if (stat!=1) {
 		UNPROTECT(1);
@@ -1753,7 +1837,7 @@ void voidEval(char *cmd) {
     } else {
 		SEXP exp=R_NilValue;
 #ifdef RSERV_DEBUG
-		printf("R_tryEval(xp,R_GlobalEnv,&Rerror);\n");
+		LOGDEBUG("R_tryEval(xp,R_GlobalEnv,&Rerror);\n");
 #endif
 		if (TYPEOF(xp)==EXPRSXP && LENGTH(xp)>0) {
 			int bi=0;
@@ -1761,13 +1845,13 @@ void voidEval(char *cmd) {
 				SEXP pxp=VECTOR_ELT(xp, bi);
 				Rerror=0;
 #ifdef RSERV_DEBUG
-				printf("Calling R_tryEval for expression %d [type=%d] ...\n",bi+1,TYPEOF(pxp));
+				LOGDEBUG("Calling R_tryEval for expression %d [type=%d] ...\n",bi+1,TYPEOF(pxp));
 #endif
 				exp=R_tryEval(pxp, R_GlobalEnv, &Rerror);
 				bi++;
 #ifdef RSERV_DEBUG
-				printf("Expression %d, error code: %d\n",bi, Rerror);
-				if (Rerror) printf(">> early error, aborting further evaluations\n");
+				LOGDEBUG("Expression %d, error code: %d\n",bi, Rerror);
+				if (Rerror) LOGDEBUG(">> early error, aborting further evaluations\n");
 #endif
 				if (Rerror) break;
 			}
@@ -1815,7 +1899,7 @@ int detach_session(SOCKET s) {
 	while (bind(ss,build_sin(&ssa,0,port),sizeof(ssa))) {
 		if (errno!=EADDRINUSE) {
 #ifdef RSERV_DEBUG
-			printf("session: error in bind other than EADDRINUSE (0x%x)",  errno);
+			LOGDEBUG("session: error in bind other than EADDRINUSE (0x%x)\n",  errno);
 #endif
 			closesocket(ss);
 			sendResp(s,SET_STAT(RESP_ERR,ERR_detach_failed));
@@ -1824,7 +1908,7 @@ int detach_session(SOCKET s) {
 		port++;
 		if (port>65530) {
 #ifdef RSERV_DEBUG
-			printf("session: can't find available prot to listed on.\n");
+			LOGDEBUG("session: can't find available prot to listed on.\n");
 #endif
 			closesocket(ss);
 			sendResp(s,SET_STAT(RESP_ERR,ERR_detach_failed));
@@ -1834,7 +1918,7 @@ int detach_session(SOCKET s) {
 
     if (listen(ss, maxlistenq)) {
 #ifdef RSERV_DEBUG
-		printf("session: cannot listen.\n");
+		LOGDEBUG("session: cannot listen.\n");
 #endif
 		closesocket(ss);
 		sendResp(s,SET_STAT(RESP_ERR,ERR_detach_failed));
@@ -1847,7 +1931,7 @@ int detach_session(SOCKET s) {
 	}
 
 #ifdef RSERV_DEBUG
-	printf("session: listening on port %d\n", port);
+	LOGDEBUG("session: listening on port %d\n", port);
 #endif
 
 	dsr.pt1  = itop(SET_PAR(DT_INT,sizeof(int)));
@@ -1862,7 +1946,7 @@ int detach_session(SOCKET s) {
 	sendRespData(s, RESP_OK, 3*sizeof(int)+32, &dsr);
 	closesocket(s);
 #ifdef RSERV_DEBUG
-	printf("session: detached, closing connection.\n");
+	LOGDEBUG("session: detached, closing connection.\n");
 #endif
 	session_socket=ss;
 	return 0;
@@ -1878,30 +1962,30 @@ SOCKET resume_session() {
 	char clk[32];
 
 #ifdef RSERV_DEBUG
-	printf("session: resuming session, waiting for connections.\n");
+	LOGDEBUG("session: resuming session, waiting for connections.\n");
 #endif
 
 	while ((s=(int)accept(session_socket, (SA*)&lsa,&al))>1) {
 		if (lsa.sin_addr.s_addr != session_peer_sa.sin_addr.s_addr) {
 #ifdef RSERV_DEBUG
-			printf("session: different IP, rejecting\n");
+			LOGDEBUG("session: different IP, rejecting\n");
 #endif
 			closesocket(s);
 		} else {
 			int n=0;
 			if ((n=recv(s, (char*)clk, 32, 0)) != 32) {
 #ifdef RSERV_DEBUG
-				printf("session: expected 32, got %d = closing\n", n);
+				LOGDEBUG("session: expected 32, got %d = closing\n", n);
 #endif
 				closesocket(s);
 			} else if (memcmp(clk, session_key, 32)) {
 #ifdef RSERV_DEBUG
-				printf("session: wrong key, closing\n");
+				LOGDEBUG("session: wrong key, closing\n");
 #endif
 				closesocket(s);
 			} else {
 #ifdef RSERV_DEBUG
-				printf("session: accepted\n");
+				LOGDEBUG("session: accepted\n");
 #endif
 				return s;
 			}
@@ -1989,7 +2073,7 @@ void *cancelValidateConn(void *ifd) {
         char recvBuff[1025];
         memset(recvBuff, '0', sizeof(recvBuff));  
 #ifdef RSERV_DEBUG
-                printf(">>CMD_cancel sfd %d  \n", sfd);
+                LOGDEBUG(">>CMD_cancel sfd %d  \n", sfd);
 #endif
 
 
@@ -2007,7 +2091,7 @@ void *cancelValidateConn(void *ifd) {
                 recvBuff[rn] = 0;
         	clientPid = atoi (recvBuff);		
 #ifdef RSERV_DEBUG
-                printf(">>CMD_cancel clientPid %d  \n", clientPid);
+                LOGDEBUG(">>CMD_cancel clientPid %d  \n", clientPid);
 #endif
                 if (clientPid > 0) {
 #ifdef Win32
@@ -2026,7 +2110,7 @@ void *cancelValidateConn(void *ifd) {
     
 
 #ifdef RSERV_DEBUG
-    printf("done with cancel.\n");
+    LOGDEBUG("done with cancel.\n");
 #endif
 
 //    exit(0);
@@ -2096,7 +2180,7 @@ decl_sbthread newConn(void *thp) {
 				child_process_t *cp = (child_process_t*) malloc(sizeof(child_process_t));
 				_close(cinp[1]); /* close the write end which is what the child will be using */
 #ifdef RSERV_DEBUG
-				printf("child %d was spawned, registering input pipe\n", (int)lastChild);
+				LOGDEBUG("child %d was spawned, registering input pipe\n", (int)lastChild);
 #endif
 				cp->inp = cinp[0];
 				cp->pid = lastChild;
@@ -2139,7 +2223,7 @@ decl_sbthread newConn(void *thp) {
     buf = (char*) malloc(inBuf + 8);
     sfbuf = (char*) malloc(sfbufSize);
     if (!buf || !sfbuf) {
-		fprintf(stderr,"FATAL: cannot allocate initial buffers. closing client connection.\n");
+		LOGERROR("FATAL: cannot allocate initial buffers. closing client connection.\n");
 		s = a->s;
 		free(a);
 		closesocket(s);
@@ -2168,7 +2252,7 @@ decl_sbthread newConn(void *thp) {
     sendBufSize = sndBS;
     sendbuf = (char*) malloc(sendBufSize);
 #ifdef RSERV_DEBUG
-    printf("connection accepted.\n");
+    LOGDEBUG("connection accepted.\n");
 #endif
     s=a->s;
     free(a);
@@ -2225,7 +2309,7 @@ decl_sbthread newConn(void *thp) {
 		size_t plen = 0;
 		SEXP pp = R_NilValue; /* packet payload (as a raw vector) for special commands */
 #ifdef RSERV_DEBUG
-		printf("\nheader read result: %d\n", rn);
+		LOGDEBUG("header read result: %d\n", rn);
 		if (rn > 0) printDump(&ph, rn);
 #endif
 		ph.len = ptoi(ph.len);
@@ -2248,7 +2332,7 @@ decl_sbthread newConn(void *thp) {
 			char *pbuf = (char*) RAW(pp);
 			size_t i = 0;
 #ifdef RSERV_DEBUG
-			printf("loading (raw) buffer (awaiting %d bytes)\n", (int)plen);
+			LOGDEBUG("loading (raw) buffer (awaiting %d bytes)\n", (int)plen);
 #endif
 			while((rn = recv(s, pbuf + i, (plen - i > max_sio_chunk) ? max_sio_chunk : (int)(plen - i), 0))) {
 				if (rn > 0) i += rn;
@@ -2263,13 +2347,13 @@ decl_sbthread newConn(void *thp) {
 				rlen_t i;
 				if (plen >= inBuf) {
 #ifdef RSERV_DEBUG
-					printf("resizing input buffer (was %ld, need %ld) to %ld\n", (long)inBuf, (long) plen, (long)(((plen | 0x1fffL) + 1L)));
+					LOGDEBUG("resizing input buffer (was %ld, need %ld) to %ld\n", (long)inBuf, (long) plen, (long)(((plen | 0x1fffL) + 1L)));
 #endif
 					free(buf); /* the buffer is just a scratchpad, so we don't need to use realloc */
 					buf = (char*) malloc(inBuf = (((int)plen | 0x1fffL) + 1L)); /* use 8kB granularity */
 					if (!buf) {
 #ifdef RSERV_DEBUG
-						fprintf(stderr,"FATAL: out of memory while resizing buffer to %d,\n", (int)inBuf);
+						LOGERROR("FATAL: out of memory while resizing buffer to %d,\n", (int)inBuf);
 #endif
 						sendResp(s,SET_STAT(RESP_ERR,ERR_out_of_mem));
 						free(sendbuf); free(sfbuf);
@@ -2278,7 +2362,7 @@ decl_sbthread newConn(void *thp) {
 					}	    
 				}
 #ifdef RSERV_DEBUG
-				printf("loading buffer (awaiting %ld bytes)\n",(long) plen);
+				LOGDEBUG("loading buffer (awaiting %ld bytes)\n",(long) plen);
 #endif
 				i = 0;
 				while ((rn = recv(s, ((char*)buf) + i, ((int)plen - i > max_sio_chunk) ? max_sio_chunk : ((int)plen - i), 0))) {
@@ -2290,7 +2374,7 @@ decl_sbthread newConn(void *thp) {
 		
 				unaligned = 0;
 #ifdef RSERV_DEBUG
-				printf("parsing parameters (buf=%p, len=%ld)\n", buf, (long) plen);
+				LOGDEBUG("parsing parameters (buf=%p, len=%ld)\n", buf, (long) plen);
 				if (plen > 0) printDump(buf,(int)plen);
 #endif
 				c = buf + ph.dof;
@@ -2304,14 +2388,14 @@ decl_sbthread newConn(void *thp) {
 						parType ^= DT_LARGE;
 					} 
 #ifdef RSERV_DEBUG
-					printf("PAR[%d]: %08lx (PAR_LEN=%ld, PAR_TYPE=%d, large=%s, c=%p, ptr=%p)\n", pars, i,
+					LOGDEBUG("PAR[%d]: %08lx (PAR_LEN=%ld, PAR_TYPE=%d, large=%s, c=%p, ptr=%p)\n", pars, i,
 						   (long)parLen, parType, (headSize==8)?"yes":"no", c, c + headSize);
 #endif
 #ifdef ALIGN_DOUBLES
 					if (unaligned) { /* on Sun machines it is deadly to process unaligned parameters,
 										therefore we respond with ERR_inv_par */
 #ifdef RSERV_DEBUG
-						printf("Platform specific: last parameter resulted in unaligned stream for the current one, sending ERR_inv_par.\n");
+						LOGDEBUG("Platform specific: last parameter resulted in unaligned stream for the current one, sending ERR_inv_par.\n");
 #endif
 						sendResp(s, SET_STAT(RESP_ERR, ERR_inv_par));
 						process = 1; ph.cmd = 0;
@@ -2327,7 +2411,7 @@ decl_sbthread newConn(void *thp) {
 					if (pars > 15) break;
 				} /* we don't parse more than 16 parameters */
 			} else {
-				printf("discarding buffer because too big (awaiting %ld bytes)\n", (long)plen);
+				LOGDEBUG("discarding buffer because too big (awaiting %ld bytes)\n", (long)plen);
 				size_t i = plen, chk = (inBuf < max_sio_chunk) ? inBuf : max_sio_chunk;
 				while((rn = recv(s, (char*)buf, (int)(i < chk) ? (int)i : (int)chk, 0))) {
 					if (rn > 0) i -= rn;
@@ -2353,7 +2437,7 @@ decl_sbthread newConn(void *thp) {
 		*/
 	
 #ifdef RSERV_DEBUG
-		printf("CMD=%08x, pars=%d\n", ph.cmd, pars);
+		LOGDEBUG("CMD=%08x, pars=%d\n", ph.cmd, pars);
 #endif
 
 		if (!authed && ph.cmd==CMD_login) {
@@ -2369,7 +2453,7 @@ decl_sbthread newConn(void *thp) {
 				/* c=login, cc=pwd */
 				authed = 1;
 #ifdef RSERV_DEBUG
-				printf("Authentication attempt (login='%s',pwd='%s',pwdfile='%s')\n",c, cc, pwdfile);
+				LOGDEBUG("Authentication attempt (login='%s',pwd='%s',pwdfile='%s')\n",c, cc, pwdfile);
 #endif
 				if (pwdfile) {
 					pwdf_t *pwf;
@@ -2403,13 +2487,13 @@ decl_sbthread newConn(void *thp) {
 								if (*c == '*') { /* general authentication - useful to set control access but leave client access open */
 									authed = 1;
 #ifdef RSERV_DEBUG
-									printf("Public authentication enabled (found * entry), allowing login without checking.\n");
+									LOGDEBUG("Public authentication enabled (found * entry), allowing login without checking.\n");
 #endif
 									break;
 								}
 								if (!strcmp(sfbuf,c)) { /* login found */
 #ifdef RSERV_DEBUG
-									printf("Found login '%s', checking password.\n", c);
+									LOGDEBUG("Found login '%s', checking password.\n", c);
 #endif
 									if (usePlain && !strcmp(c1,cc)) {
 										authed=1;
@@ -2420,13 +2504,13 @@ decl_sbthread newConn(void *thp) {
 #ifdef HAS_CRYPT
 										c2=crypt(c1,salt+1);
 #ifdef RSERV_DEBUG
-										printf(" - checking crypted '%s' vs '%s'\n", c2, cc);
+										LOGDEBUG(" - checking crypted '%s' vs '%s'\n", c2, cc);
 #endif
 										if (!strcmp(c2,cc)) authed=1;
 #endif
 									}
 #ifdef DEBUG_RSERV
-									printf(" - authentication %s\n",(authed)?"succeeded":"failed");
+									LOGDEBUG(" - authentication %s\n",(authed)?"succeeded":"failed");
 #endif
 								}
 								if (authed) break;
@@ -2454,7 +2538,7 @@ decl_sbthread newConn(void *thp) {
 		if (ph.cmd==CMD_shutdown) { /* FIXME: now that we have control commands we may rethink this ... */
 			sendResp(s,RESP_OK);
 #ifdef RSERV_DEBUG
-			printf("initiating clean shutdown.\n");
+			LOGDEBUG("initiating clean shutdown.\n");
 #endif
 			active = 0;
 			closesocket(s);
@@ -2475,7 +2559,7 @@ decl_sbthread newConn(void *thp) {
 		if (ph.cmd == CMD_ctrlEval || ph.cmd == CMD_ctrlSource || ph.cmd == CMD_ctrlShutdown) {
 			process = 1;
 #ifdef RSERV_DEBUG
-			printf("control command: %s [can control: %s, pipe: %d]\n", (ph.cmd == CMD_ctrlEval) ? "eval" : ((ph.cmd == CMD_ctrlSource) ? "source" : "shutdown"), can_control ? "yes" : "no", parent_pipe);
+			LOGDEBUG("control command: %s [can control: %s, pipe: %d]\n", (ph.cmd == CMD_ctrlEval) ? "eval" : ((ph.cmd == CMD_ctrlSource) ? "source" : "shutdown"), can_control ? "yes" : "no", parent_pipe);
 #endif
 			if (!can_control) /* no right to do this */
 				sendResp(s, SET_STAT(RESP_ERR, ERR_accessDenied));
@@ -2493,7 +2577,7 @@ decl_sbthread newConn(void *thp) {
 						else cmd[0] = CCTL_SHUTDOWN;
 						if (_write(parent_pipe, cmd, sizeof(cmd)) != sizeof(cmd)) {
 #ifdef RSERV_DEBUG
-							printf(" - send to parent pipe (cmd=%ld, len=%ld) failed, closing parent pipe\n", cmd[0], cmd[1]);
+							LOGDEBUG(" - send to parent pipe (cmd=%ld, len=%ld) failed, closing parent pipe\n", cmd[0], cmd[1]);
 #endif
 							_close(parent_pipe);
 							parent_pipe = -1;
@@ -2501,7 +2585,7 @@ decl_sbthread newConn(void *thp) {
 						} else {
 							if (cmd[1] && _write(parent_pipe, parP[0], cmd[1]) != cmd[1]) {
 #ifdef RSERV_DEBUG
-								printf(" - send to parent pipe (cmd=%ld, len=%ld, sending data) failed, closing parent pipe\n", cmd[0], cmd[1]);
+								LOGDEBUG(" - send to parent pipe (cmd=%ld, len=%ld, sending data) failed, closing parent pipe\n", cmd[0], cmd[1]);
 #endif
 								_close(parent_pipe);
 								parent_pipe = 01;
@@ -2521,7 +2605,7 @@ decl_sbthread newConn(void *thp) {
 			else {
 				char *c = (char*) parP[0];
 #ifdef RSERV_DEBUG
-				printf(">>CMD_setEncoding '%s'.\n", c ? c : "<null>");
+				LOGDEBUG(">>CMD_setEncoding '%s'.\n", c ? c : "<null>");
 #endif
 #ifdef USE_ENCODING
 				if (c && set_string_encoding(c, 0))
@@ -2536,7 +2620,7 @@ decl_sbthread newConn(void *thp) {
 
         if (ph.cmd == CMD_cancel) {
 #ifdef RSERV_DEBUG
-            printf(">>CMD_cancel pars=%d partT[0]=%d  \n", pars, parT[0]);
+            LOGDEBUG(">>CMD_cancel pars=%d partT[0]=%d  \n", pars, parT[0]);
 #endif
             process = 1;
             if (pars < 1 || parT[0] != DT_INT)
@@ -2544,7 +2628,7 @@ decl_sbthread newConn(void *thp) {
             else {
                 int clientPid = ptoi(((int*) (parP[0]))[0]);
 #ifdef RSERV_DEBUG
-                printf(">>CMD_cancel pid %d  \n", clientPid);
+                LOGDEBUG(">>CMD_cancel pid %d  \n", clientPid);
 #endif
                 if (clientPid > 0) {
 #ifdef Win32
@@ -2565,7 +2649,7 @@ decl_sbthread newConn(void *thp) {
 			else {
 				rlen_t ns = ptoi(((unsigned int*)(parP[0]))[0]);
 #ifdef RSERV_DEBUG
-				printf(">>CMD_setSendBuf to %ld bytes.\n", (long)ns);
+				LOGDEBUG(">>CMD_setSendBuf to %ld bytes.\n", (long)ns);
 #endif
 				if (ns > 0) { /* 0 means don't touch the buffer size */
 					if (ns < 32768) ns = 32768; /* we enforce a minimum of 32kB */
@@ -2573,7 +2657,7 @@ decl_sbthread newConn(void *thp) {
 					sendbuf = (char*)malloc(sendBufSize);
 					if (!sendbuf) {
 #ifdef RSERV_DEBUG
-						fprintf(stderr,"FATAL: out of memory while resizing send buffer to %ld,\n", sendBufSize);
+						LOGERROR("FATAL: out of memory while resizing send buffer to %ld,\n", sendBufSize);
 #endif
 						sendResp(s,SET_STAT(RESP_ERR, ERR_out_of_mem));
 						free(buf); free(sfbuf);
@@ -2596,7 +2680,7 @@ decl_sbthread newConn(void *thp) {
 					c=(char*)(parP[0]);
 					if (cf) fclose(cf);
 #ifdef RSERV_DEBUG
-					printf(">>CMD_open/createFile(%s)\n",c);
+					LOGDEBUG(">>CMD_open/createFile(%s)\n",c);
 #endif
 #ifdef Win32
 					fopen_s(&cf, c,(ph.cmd==CMD_openFile)?"rb":"wb");
@@ -2620,7 +2704,7 @@ decl_sbthread newConn(void *thp) {
 				else {
 					c=(char*)parP[0];
 #ifdef RSERV_DEBUG
-					printf(">>CMD_removeFile(%s)\n",c);
+					LOGDEBUG(">>CMD_removeFile(%s)\n",c);
 #endif
 					if (remove(c))
 						sendResp(s,SET_STAT(RESP_ERR,ERR_IOerror));
@@ -2636,7 +2720,7 @@ decl_sbthread newConn(void *thp) {
 			else {
 				if (cf) fclose(cf);
 #ifdef RSERV_DEBUG
-				printf(">>CMD_closeFile\n");
+				LOGDEBUG(">>CMD_closeFile\n");
 #endif
 				cf=0;
 				sendResp(s,RESP_OK);
@@ -2655,12 +2739,12 @@ decl_sbthread newConn(void *thp) {
 					if (pars == 1 && parT[0] == DT_INT)
 						fbufl = ptoi(((unsigned int*)(parP[0]))[0]);
 #ifdef RSERV_DEBUG
-					printf(">>CMD_readFile(%ld)\n", fbufl);
+					LOGDEBUG(">>CMD_readFile(%ld)\n", fbufl);
 #endif
 					if (fbufl < 0) fbufl = sfbufSize;
 					if (fbufl > sfbufSize) {
 #ifdef RSERV_DEBUG
-						printf(" - requested size %ld is larger than default buffer %ld, allocating extra buffer\n",
+						LOGDEBUG(" - requested size %ld is larger than default buffer %ld, allocating extra buffer\n",
 						       (long) fbufl, (long) sfbufSize);
 #endif
 						fbuf = (char*)malloc(fbufl);
@@ -2692,7 +2776,7 @@ decl_sbthread newConn(void *thp) {
 					else {
 						size_t i = 0;
 #ifdef RSERV_DEBUG
-						printf(">>CMD_writeFile(%ld,...)\n", (long) parL[0]);
+						LOGDEBUG(">>CMD_writeFile(%ld,...)\n", (long) parL[0]);
 #endif
 						c = (char*)parP[0];
 						if (parL[0] > 0)
@@ -2721,14 +2805,14 @@ decl_sbthread newConn(void *thp) {
 		
 				c=(char*)parP[0]; /* name of the symbol */
 #ifdef RSERV_DEBUG
-				printf(">>CMD_set/assignREXP (%s, REXP)\n",c);
+				LOGDEBUG(">>CMD_set/assignREXP (%s, REXP)\n",c);
 #endif
 		
 				if (ph.cmd==CMD_assignSEXP) {
 					sym = parseExps(c, 1, &stat);
 					if (stat != 1) {
 #ifdef RSERV_DEBUG
-						printf(">>CMD_assignREXP-failed to parse \"%s\", stat=%d\n",c,stat);
+						LOGDEBUG(">>CMD_assignREXP-failed to parse \"%s\", stat=%d\n",c,stat);
 #endif
 						sendResp(s,SET_STAT(RESP_ERR,stat));
 						goto respSt;
@@ -2742,7 +2826,7 @@ decl_sbthread newConn(void *thp) {
 				switch (parType) {
 				case DT_STRING:
 #ifdef RSERV_DEBUG
-					printf("  assigning string \"%s\"\n",((char*)(parP[1])));
+					LOGDEBUG("  assigning string \"%s\"\n",((char*)(parP[1])));
 #endif
 					PROTECT(val = allocVector(STRSXP,1));
 					SET_STRING_ELT(val, 0, mkRChar((char*)(parP[1])));
@@ -2760,7 +2844,7 @@ decl_sbthread newConn(void *thp) {
 						sendResp(s,SET_STAT(RESP_ERR, ERR_inv_par));
 					else {
 #ifdef RSERV_DEBUG
-						printf("  assigning SEXP: ");
+						LOGDEBUG("  assigning SEXP: \n");
 						printSEXP(val);
 #endif
 						defineVar(sym ? sym : install(c), val, R_GlobalEnv);
@@ -2826,16 +2910,18 @@ decl_sbthread newConn(void *thp) {
 				int j = 0;
 				c=(char*)parP[0];
 #ifdef RSERV_DEBUG
-				printf("parseString(\"%s\")\n",c);
+				LOGDEBUG("parseString(\"%s\")\n",c);
 #endif
 				xp=parseString(c, &j, &stat);
 				PROTECT(xp);
 #ifdef RSERV_DEBUG
-				printf("buffer parsed, stat=%d, parts=%d\n", stat, j);
-				if (xp)
-					printf("result type: %d, length: %d\n",TYPEOF(xp),LENGTH(xp));
-				else
-					printf("result is <null>\n");
+				LOGDEBUG("buffer parsed, stat=%d, parts=%d\n", stat, j);
+				if (xp) {
+					LOGDEBUG("result type: %d, length: %d\n",TYPEOF(xp),LENGTH(xp));
+				}
+				else {
+					LOGDEBUG("result is <null>\n");
+				}
 #endif				
 				if (stat==1 && ph.cmd==CMD_detachedVoidEval && detach_session(s))
 					sendResp(s,SET_STAT(RESP_ERR,ERR_detach_failed));
@@ -2843,7 +2929,7 @@ decl_sbthread newConn(void *thp) {
 					sendResp(s,SET_STAT(RESP_ERR,stat));
 				else {
 #ifdef RSERV_DEBUG
-					printf("R_tryEval(xp,R_GlobalEnv,&Rerror);\n");
+					LOGDEBUG("R_tryEval(xp,R_GlobalEnv,&Rerror);\n");
 #endif
 					if (ph.cmd==CMD_detachedVoidEval)
 						s=-1;
@@ -2854,13 +2940,13 @@ decl_sbthread newConn(void *thp) {
 							SEXP pxp=VECTOR_ELT(xp, bi);
 							Rerror=0;
 #ifdef RSERV_DEBUG
-							printf("Calling R_tryEval for expression %d [type=%d] ...\n",bi+1,TYPEOF(pxp));
+							LOGDEBUG("Calling R_tryEval for expression %d [type=%d] ...\n",bi+1,TYPEOF(pxp));
 #endif
 							exp=R_tryEval(pxp, R_GlobalEnv, &Rerror);
 							bi++;
 #ifdef RSERV_DEBUG
-							printf("Expression %d, error code: %d\n",bi, Rerror);
-							if (Rerror) printf(">> early error, aborting further evaluations\n");
+							LOGDEBUG("Expression %d, error code: %d\n",bi, Rerror);
+							if (Rerror) LOGDEBUG(">> early error, aborting further evaluations\n");
 #endif
 							if (Rerror) break;
 						}
@@ -2870,7 +2956,7 @@ decl_sbthread newConn(void *thp) {
 					}
 					PROTECT(exp);
 #ifdef RSERV_DEBUG
-					printf("expression(s) evaluated (Rerror=%d).\n",Rerror);
+					LOGDEBUG("expression(s) evaluated (Rerror=%d).\n",Rerror);
 					if (!Rerror) printSEXP(exp);
 #endif
 					if (ph.cmd==CMD_detachedVoidEval && s==-1)
@@ -2892,7 +2978,7 @@ decl_sbthread newConn(void *thp) {
 							   converted. They should be convered by this margin but it is an ugly hack!! */
 							rs += (rs >> 2);
 #ifdef RSERV_DEBUG
-							printf("result storage size = %ld bytes\n",(long)rs);
+							LOGDEBUG("result storage size = %ld bytes\n",(long)rs);
 #endif
 							if (rs > sendBufSize - 64L) { /* is the send buffer too small ? */
 								canProceed = 0;
@@ -2900,7 +2986,7 @@ decl_sbthread newConn(void *thp) {
 									unsigned int osz = (rs > 0xffffffff) ? 0xffffffff : rs;
 									osz = itop(osz);
 #ifdef RSERV_DEBUG
-									printf("ERROR: object too big (sendBuf=%ld)\n", sendBufSize);
+									LOGDEBUG("ERROR: object too big (sendBuf=%ld)\n", sendBufSize);
 #endif
 									sendRespData(s,SET_STAT(RESP_ERR,ERR_object_too_big), 4, &osz);
 								} else { /* try to allocate a large, temporary send buffer */
@@ -2908,19 +2994,19 @@ decl_sbthread newConn(void *thp) {
 									tempSB &= rlen_max << 12;
 									tempSB += 0x1000;
 #ifdef RSERV_DEBUG
-									printf("Trying to allocate temporary send buffer of %ld bytes.\n", (long)tempSB);
+									LOGDEBUG("Trying to allocate temporary send buffer of %ld bytes.\n", (long)tempSB);
 #endif
 									free(sendbuf);
 									sendbuf = (char*)malloc(tempSB);
 									if (!sendbuf) {
 										tempSB = 0;
 #ifdef RSERV_DEBUG
-										printf("Failed to allocate temporary send buffer of %ld bytes. Restoring old send buffer of %ld bytes.\n", (long)tempSB, (long)sendBufSize);
+										LOGDEBUG("Failed to allocate temporary send buffer of %ld bytes. Restoring old send buffer of %ld bytes.\n", (long)tempSB, (long)sendBufSize);
 #endif
 										sendbuf = (char*)malloc(sendBufSize);
 										if (!sendbuf) { /* we couldn't re-allocate the buffer */
 #ifdef RSERV_DEBUG
-											fprintf(stderr,"FATAL: out of memory while re-allocating send buffer to %ld (fallback#1)\n", sendBufSize);
+											LOGERROR("FATAL: out of memory while re-allocating send buffer to %ld (fallback#1)\n", sendBufSize);
 #endif
 											sendResp(s,SET_STAT(RESP_ERR,ERR_out_of_mem));
 											free(buf); free(sfbuf);
@@ -2930,7 +3016,7 @@ decl_sbthread newConn(void *thp) {
 											unsigned int osz = (rs > 0xffffffff) ? 0xffffffff : rs;
 											osz = itop(osz);
 #ifdef RSERV_DEBUG
-											printf("ERROR: object too big (sendBuf=%ld) and couldn't allocate big enough send buffer\n", sendBufSize);
+											LOGDEBUG("ERROR: object too big (sendBuf=%ld) and couldn't allocate big enough send buffer\n", sendBufSize);
 #endif
 											sendRespData(s,SET_STAT(RESP_ERR,ERR_object_too_big), 4, &osz);
 										}
@@ -2959,18 +3045,18 @@ decl_sbthread newConn(void *thp) {
 								}
 #endif
 #ifdef RSERV_DEBUG
-								printf("stored SEXP; length=%ld (incl. DT_SEXP header)\n",(long) (tail - sendhead));
+								LOGDEBUG("stored SEXP; length=%ld (incl. DT_SEXP header)\n",(long) (tail - sendhead));
 #endif
 								sendRespData(s, RESP_OK, (rlen_t)(tail - sendhead), sendhead);
 								if (tempSB) { /* if this is just a temporary sendbuffer then shrink it back to normal */
 #ifdef RSERV_DEBUG
-									printf("Releasing temporary sendbuf and restoring old size of %ld bytes.\n", sendBufSize);
+									LOGDEBUG("Releasing temporary sendbuf and restoring old size of %ld bytes.\n", sendBufSize);
 #endif
 									free(sendbuf);
 									sendbuf = (char*)malloc(sendBufSize);
 									if (!sendbuf) { /* this should be really rare since tempSB was much larger */
 #ifdef RSERV_DEBUG
-										fprintf(stderr,"FATAL: out of memory while re-allocating send buffer to %ld (fallback#2),\n", sendBufSize);
+										LOGERROR("FATAL: out of memory while re-allocating send buffer to %ld (fallback#2),\n", sendBufSize);
 #endif
 										sendResp(s, SET_STAT(RESP_ERR, ERR_out_of_mem));
 										free(buf); free(sfbuf);
@@ -2985,7 +3071,7 @@ decl_sbthread newConn(void *thp) {
 					UNPROTECT(1); /* xp */
 				}
 #ifdef RSERV_DEBUG
-				printf("reply sent.\n");
+				LOGDEBUG("reply sent.\n");
 #endif
 			}
 		}
@@ -2997,29 +3083,30 @@ decl_sbthread newConn(void *thp) {
 			sendResp(s,SET_STAT(RESP_ERR,ERR_inv_cmd));
     }
 #ifdef RSERV_DEBUG
-    if (rn == 0)
-		printf("Connection closed by peer.\n");
+	if (rn == 0) {
+		LOGDEBUG("Connection closed by peer.\n");
+	}
     else {
-		printf("malformed packet (n=%d). closing socket to prevent garbage.\n", rn);
+		LOGDEBUG("malformed packet (n=%d). closing socket to prevent garbage.\n", rn);
 		if (rn > 0) printDump(&ph, rn);
     }
 #endif
     if (rn > 0)
 
 #ifdef RSERV_DEBUG
-    printf("closesocket\n");
+    LOGDEBUG("closesocket\n");
 #endif		
     sendResp(s, SET_STAT(RESP_ERR, ERR_conn_broken));
     closesocket(s);
 #ifdef RSERV_DEBUG
-    printf("free mem\n");
+    LOGDEBUG("free mem\n");
 #endif
     free(sendbuf);
 	free(sfbuf); 
 	free(buf);
 
 #ifdef RSERV_DEBUG
-    printf("rm workdir\n");
+    LOGDEBUG("rm workdir\n");
 #endif
     if (workdir) {
 		_chdir(workdir);
@@ -3027,7 +3114,7 @@ decl_sbthread newConn(void *thp) {
     }
     
 #ifdef RSERV_DEBUG
-    printf("done.\n");
+    LOGDEBUG("done.\n");
 #endif
 #ifdef FORKED
     /* we should not return to the main loop, but terminate instead */
@@ -3086,7 +3173,7 @@ DWORD WINAPI cleanUpLoop(void* data)
 					if (w == WAIT_OBJECT_0)
 					{
 						winSocks[jj] = INVALID_SOCKET;
-						printf("close handles... w = %d Process = %d Thread = %d\n", w, (int)winPI[jj].hProcess, (int)winPI[jj].hThread);
+						LOGINFO("close handles... w = %d Process = %d Thread = %d\n", w, (int)winPI[jj].hProcess, (int)winPI[jj].hThread);
 						__try
 						{
 							CloseHandle(winPI[jj].hProcess);
@@ -3094,7 +3181,7 @@ DWORD WINAPI cleanUpLoop(void* data)
 						}
 						__except (EXCEPTION_EXECUTE_HANDLER)
 						{
-							printf("couldn't close handle\n");
+							LOGERROR("couldn't close handle\n");
 						}	
 						winPI[jj].hProcess = 0;
 
@@ -3157,14 +3244,14 @@ SOCKET cs;
     initsocks();
     if (localSocketName) {
 #ifndef unix
-		fprintf(stderr,"Local sockets are not supported on non-unix systems.\n");
+		LOGERROR("Local sockets are not supported on non-unix systems.\n");
 		return;
 #else
 		ss=FCF("open socket",socket(AF_LOCAL,SOCK_STREAM,0));
 		memset(&lusa,0,sizeof(lusa));
 		lusa.sun_family=AF_LOCAL;
 		if (strlen(localSocketName)>sizeof(lusa.sun_path)-2) {
-			fprintf(stderr,"Local socket name is too long for this system.\n");
+			LOGERROR("Local socket name is too long for this system.\n");
 			return;
 		}
 		strcpy(lusa.sun_path,localSocketName);
@@ -3195,8 +3282,8 @@ SOCKET cs;
 	} else
 #endif
 #if defined RSERV_DEBUG
-    printf("Rserve: bind socket port = %d\n",port);
-    printf("Rserve: bind socket cancelPort = %d\n",cancelPort);
+    LOGDEBUG("Rserve: bind socket port = %d\n",port);
+    LOGDEBUG("Rserve: bind socket cancelPort = %d\n",cancelPort);
 #endif
 		FCF("bind",bind(ss,build_sin(&ssa,0,port),sizeof(ssa)));
 		FCF("bind",bind(cs,build_sin(&cssa,0,cancelPort),sizeof(cssa)));
@@ -3246,7 +3333,7 @@ SOCKET cs;
         
 		if (selRet > 0 && FD_ISSET(ss,&readfds)) {
 #ifdef RSERV_DEBUG
-			printf(" after select selRet = %d\n",selRet);
+			LOGDEBUG(" after select selRet = %d\n",selRet);
 #endif
 
 			sa=(struct args*)malloc(sizeof(struct args));
@@ -3337,7 +3424,7 @@ SOCKET cs;
 					if (n < sizeof(cmd)) { /* is anything less arrives, assume corruption and remove the child */
 						child_process_t *ncp = cp->next;
 #ifdef RSERV_DEBUG
-						printf("pipe to child %d closed (n=%d), removing child\n", (int) cp->pid, n);
+						LOGDEBUG("pipe to child %d closed (n=%d), removing child\n", (int) cp->pid, n);
 #endif
 						close(cp->inp);
 						/* remove the child from the list */
@@ -3350,7 +3437,7 @@ SOCKET cs;
 						char cib[256];
 						char *xb = 0;
 #ifdef RSERV_DEBUG
-						printf(" command from child %d: %ld data bytes: %ld\n", (int) cp->pid, cmd[0], cmd[1]);
+						LOGDEBUG(" command from child %d: %ld data bytes: %ld\n", (int) cp->pid, cmd[0], cmd[1]);
 #endif
 						cib[0] = 0;
 						cib[255] = 0;
@@ -3366,12 +3453,12 @@ SOCKET cs;
 								xb[n] = 0;
 						}
 #ifdef RSERV_DEBUG
-						printf(" - read %d bytes of %ld data from child %d\n", n, cmd[1], (int) cp->pid);
+						LOGDEBUG(" - read %d bytes of %ld data from child %d\n", n, cmd[1], (int) cp->pid);
 #endif
 						if (n == cmd[1]) { /* perform commands only if we got all the data */
 							if (cmd[0] == CCTL_EVAL) {
 #ifdef RSERV_DEBUG
-								printf(" - control calling voidEval(\"%s\")\n", xb ? xb : cib);
+								LOGDEBUG(" - control calling voidEval(\"%s\")\n", xb ? xb : cib);
 #endif
 								voidEval(xb ? xb : cib);
 							} else if (cmd[0] == CCTL_SOURCE) {
@@ -3381,16 +3468,16 @@ SOCKET cs;
 								SET_STRING_ELT(sfn, 0, mkRChar(xb ? xb : cib));
 								exp = LCONS(install("source"), CONS(sfn, R_NilValue));
 #ifdef RSERV_DEBUG
-								printf(" - control calling source(\"%s\")\n", xb ? xb : cib);
+								LOGDEBUG(" - control calling source(\"%s\")\n", xb ? xb : cib);
 #endif
 								R_tryEval(exp, R_GlobalEnv, &evalRes);
 #ifdef RSERV_DEBUG
-								printf(" - result: %d\n", evalRes);
+								LOGDEBUG(" - result: %d\n", evalRes);
 #endif
 								UNPROTECT(1);								
 							} else if (cmd[0] == CCTL_SHUTDOWN) {
 #ifdef RSERV_DEBUG
-								printf(" - shutdown via control, setting active to 0\n");
+								LOGDEBUG(" - shutdown via control, setting active to 0\n");
 #endif
 								active = 0;
 							}
@@ -3422,7 +3509,7 @@ SOCKET cs;
 
 			} else {  // remote enabled
 #ifdef RSERV_DEBUG
-			printf(" just before cancel/ping\n");
+			LOGDEBUG(" just before cancel/ping\n");
 #endif
                         connfd = accept(cs, (struct sockaddr*)NULL, NULL);
 #ifdef unix
@@ -3482,10 +3569,10 @@ int main(int argc, char **argv)
 #endif
 
 #ifdef RSERV_DEBUG
-	printf("Rserve %d.%d-%d (%s) (C)Copyright 2002-2011 Simon Urbanek\n%s\n\n", RSRV_VER >> 16, (RSRV_VER >> 8) & 255, RSRV_VER & 255, rserve_rev, rserve_ver_id);
+	LOGDEBUG("Rserve %d.%d-%d (%s) (C)Copyright 2002-2011 Simon Urbanek\n%s\n\n", RSRV_VER >> 16, (RSRV_VER >> 8) & 255, RSRV_VER & 255, rserve_rev, rserve_ver_id);
 #endif
 	if (!isByteSexOk()) {
-		printf("FATAL ERROR: This program was not correctly compiled - the endianess is wrong!\nUse -DSWAPEND when compiling on PPC or similar platforms.\n");
+		LOGDEBUG("FATAL ERROR: This program was not correctly compiled - the endianess is wrong!\nUse -DSWAPEND when compiling on PPC or similar platforms.\n");
 		return -100;
 	}
 
@@ -3501,73 +3588,87 @@ int main(int argc, char **argv)
 		if (argv[i] && *argv[i] == '-' && argv[i][1] == '-') {
 			if (!strcmp(argv[i] + 2, "RS-port")) {
 				isRSP = 1;
-				if (i + 1 == argc)
-					fprintf(stderr, "Missing port specification for --RS-port.\n");
+				if (i + 1 == argc) {
+					LOGERROR("Missing port specification for --RS-port.\n");
+				}
 				else {
 					port = satoi(argv[++i]);
 					if (port < 1) {
-						fprintf(stderr, "Invalid port number in --RS-port, using default port.\n");
+						LOGERROR("Invalid port number in --RS-port, using default port.\n");
 						port = default_Rsrv_port;
 					}
 				}
 			}
 			if (!strcmp(argv[i] + 2, "RS-dumplimit")) {
 				isRSP = 1;
-				if (i + 1 == argc)
-					fprintf(stderr, "Missing limit specification for --RS-dumplimit.\n");
-				else
+				if (i + 1 == argc) {
+					LOGERROR("Missing limit specification for --RS-dumplimit.\n");
+				}
+				else {
 					dumpLimit = satoi(argv[++i]);
+				}
 			}
 			if (!strcmp(argv[i] + 2, "RS-socket")) {
 				isRSP = 1;
-				if (i + 1 == argc)
-					fprintf(stderr, "Missing socket specification for --RS-socket.\n");
-				else
+				if (i + 1 == argc) {
+					LOGERROR("Missing socket specification for --RS-socket.\n");
+				}
+				else {
 					localSocketName = argv[++i];
+				}
 			}
 			if (!strcmp(argv[i] + 2, "RS-encoding")) {
 				isRSP = 1;
-				if (i + 1 == argc)
-					fprintf(stderr, "Missing socket specification for --RS-encoding.\n");
-				else
+				if (i + 1 == argc) {
+					LOGERROR("Missing socket specification for --RS-encoding.\n");
+				}
+				else {
 					set_string_encoding(argv[++i], 1);
+				}
 			}
 			if (!strcmp(argv[i] + 2, "RS-workdir")) {
 				isRSP = 1;
-				if (i + 1 == argc)
-					fprintf(stderr, "Missing directory specification for --RS-workdir.\n");
-				else
+				if (i + 1 == argc) {
+					LOGERROR("Missing directory specification for --RS-workdir.\n");
+				}
+				else {
 					workdir = argv[++i];
+				}
 			}
 			if (!strcmp(argv[i] + 2, "RS-conf")) {
 				isRSP = 1;
-				if (i + 1 == argc)
-					fprintf(stderr, "Missing config file specification for --RS-conf.\n");
-				else
+				if (i + 1 == argc) {
+					LOGERROR("Missing config file specification for --RS-conf.\n");
+				}
+				else {
 					loadConfig(argv[++i]);
+				}
 			}
 			if (!strcmp(argv[i] + 2, "RS-settings")) {
-				printf("Rserve v%d.%d-%d\n\nconfig file: %s\nworking root: %s\nport: %d\nlocal socket: %s\nauthorization required: %s\nplain text password: %s\npasswords file: %s\nallow I/O: %s\nallow remote access: %s\ncontrol commands: %s\ninteractive: %s\nmax.input buffer size: %ld kB\n\n",
+				LOGDEBUG("Rserve v%d.%d-%d\n\nconfig file: %s\nworking root: %s\nport: %d\nlocal socket: %s\nauthorization required: %s\nplain text password: %s\npasswords file: %s\nallow I/O: %s\nallow remote access: %s\ncontrol commands: %s\ninteractive: %s\nmax.input buffer size: %ld kB\n\n",
 					RSRV_VER >> 16, (RSRV_VER >> 8) & 255, RSRV_VER & 255,
 					CONFIG_FILE, workdir, port, localSocketName ? localSocketName : "[none, TCP/IP used]",
 					authReq ? "yes" : "no", usePlain ? "allowed" : "not allowed", pwdfile ? pwdfile : "[none]",
 					allowIO ? "yes" : "no", localonly ? "no" : "yes",
 					child_control ? "yes" : "no", Rsrv_interactive ? "yes" : "no", maxInBuf / 1024L);
+				closeLogFile(); 
 				return 0;
 			}
 			if (!strcmp(argv[i] + 2, "RS-maxclients")) {
 				isRSP = 1;
-				if (i + 1 == argc)
-					fprintf(stderr, "Missing limit specification for --RS-maxclients.\n");
-				else
+				if (i + 1 == argc) {
+					LOGERROR("Missing limit specification for --RS-maxclients.\n");
+				}
+				else {
 					MAX_CLIENTS = satoi(argv[++i]);
+				}
 			}
 			//used only when launching Win32 child process via CreateProcess 
 			if (!strcmp(argv[i] + 2, "win32child")) {
 				iWin32Child = 1;
 				if (i + 1 == argc)
 				{
-					fprintf(stderr, "Missing socket specification for --win32child.\n");
+					LOGERROR("Missing socket specification for --win32child.\n");
 				}
 				else
 				{
@@ -3578,19 +3679,21 @@ int main(int argc, char **argv)
 					if (WSADuplicateSocket((SOCKET)socket, GetCurrentProcessId(), &pi))
 					{
 						int rc = WSAGetLastError();
-						printf("rc_WSADuplicateSocket=%d\n", rc);
+						LOGERROR("rc_WSADuplicateSocket=%d\n", rc);
+						closeLogFile(); 
 						return -1;
 					}
 
 					SOCKET socket_duplicate = 0;
 					if ((socket_duplicate = WSASocket(pi.iAddressFamily, pi.iSocketType, pi.iProtocol, &pi, 0, 0)) != INVALID_SOCKET)
 					{
-						printf("WSASocket=%d\n", socket_duplicate);
+						LOGERROR("WSASocket=%d\n", socket_duplicate);
 					}
 					else
 					{
 						int rc = WSAGetLastError();
-						printf("rc_WSASocket=%d\n", rc);
+						LOGERROR("rc_WSASocket=%d\n", rc);
+						closeLogFile(); 
 						return -1;
 					}
 					socket = socket_duplicate;
@@ -3599,19 +3702,22 @@ int main(int argc, char **argv)
 				}
 			}
 			if (!strcmp(argv[i] + 2, "ppid")) {
-				if (i + 1 == argc)
-					fprintf(stderr, "Missing parent PID specification for --ppid.\n");
-				else
+				if (i + 1 == argc) {
+					LOGERROR("Missing parent PID specification for --ppid.\n");
+				}
+				else {
 					parentPID = atoi(argv[++i]);
+				}
 			}
 			if (!strcmp(argv[i] + 2, "version")) {
-				printf("Rserve v%d.%d-%d (%s)\n", RSRV_VER >> 16, (RSRV_VER >> 8) & 255, RSRV_VER & 255, rserve_rev);
+				LOGINFO("Rserve v%d.%d-%d (%s)\n", RSRV_VER >> 16, (RSRV_VER >> 8) & 255, RSRV_VER & 255, rserve_rev);
 			}
 			if (!strcmp(argv[i] + 2, "help")) {
-				printf("Usage: R CMD Rserve [<options>]\n\nOptions: --help  this help screen\n --version  prints Rserve version (also passed to R)\n --RS-port <port> listen on the specified TCP port\n --RS-socket <socket> use specified local (unix) socket instead of TCP/IP.\n --RS-workdir <path> use specified working directory root for connections.\n --RS-encoding <enc> set default server string encoding to <enc>.\n --RS-conf <file> load additional config file.\n --RS-settings  dumps current settings of the Rserve\n\nAll other options are passed to the R engine.\n\n");
+				LOGINFO("Usage: R CMD Rserve [<options>]\n\nOptions: --help  this help screen\n --version  prints Rserve version (also passed to R)\n --RS-port <port> listen on the specified TCP port\n --RS-socket <socket> use specified local (unix) socket instead of TCP/IP.\n --RS-workdir <path> use specified working directory root for connections.\n --RS-encoding <enc> set default server string encoding to <enc>.\n --RS-conf <file> load additional config file.\n --RS-settings  dumps current settings of the Rserve\n\nAll other options are passed to the R engine.\n\n");
 #ifdef RSERV_DEBUG
-				printf("debugging flag:\n --RS-dumplimit <number>  sets limit of items/bytes to dump in debugging output. set to 0 for unlimited\n\n");
+				LOGDEBUG("debugging flag:\n --RS-dumplimit <number>  sets limit of items/bytes to dump in debugging output. set to 0 for unlimited\n\n");
 #endif
+				closeLogFile(); 
 				return 0;
 			}
 		}
@@ -3659,7 +3765,8 @@ int main(int argc, char **argv)
 
 	stat = Rf_initEmbeddedR(top_argc, top_argv);
 	if (stat < 0) {
-		printf("Failed to initialize embedded R! (stat=%d)\n", stat);
+		LOGERROR("Failed to initialize embedded R! (stat=%d)\n", stat);
+		closeLogFile(); 
 		return -1;
 	}
 #ifndef WIN32
@@ -3671,17 +3778,17 @@ int main(int argc, char **argv)
     if (src_list) { /* do any sourcing if necessary */
 		struct source_entry *se=src_list;
 #ifdef RSERV_DEBUG
-		printf("Executing source/eval commands from the config file.\n");
+		LOGDEBUG("Executing source/eval commands from the config file.\n");
 #endif
 		while (se) {
 #ifdef RSERV_DEBUG
-			printf("voidEval(\"%s\")\n", se->line);
+			LOGDEBUG("voidEval(\"%s\")\n", se->line);
 #endif
 			voidEval(se->line);
 			se=se->next;
 		}
 #ifdef RSERV_DEBUG
-		printf("Done with initial commands.\n");
+		LOGDEBUG("Done with initial commands.\n");
 #endif
     }
 	
@@ -3701,7 +3808,7 @@ int main(int argc, char **argv)
 	
 	
 #if defined RSERV_DEBUG || defined Win32
-    printf("Rserve: Ok, ready to answer queries.\n");
+    LOGINFO("Rserve: Ok, ready to answer queries.\n");
 #endif      
     
 #if defined DAEMON && defined unix
@@ -3712,7 +3819,7 @@ int main(int argc, char **argv)
     }
 
 #if defined RSERV_DEBUG
-    printf("Rserve: in daemon mode and in child.\n");
+    LOGDEBUG("Rserve: in daemon mode and in child.\n");
 #endif
     
     setsid();
@@ -3724,7 +3831,7 @@ int main(int argc, char **argv)
     
     if (!iWin32Child) {
 #if defined RSERV_DEBUG
-    printf("Rserve: starting serverLoop.\n");
+    LOGDEBUG("Rserve: starting serverLoop.\n");
 #endif
       serverLoop();
     } else {
@@ -3744,9 +3851,10 @@ int main(int argc, char **argv)
 #endif
     
 #ifdef RSERV_DEBUG
-    printf("\nServer terminated normally.\n");
+    LOGDEBUG("\nServer terminated normally.\n");
 #endif
-    return 0;
+	closeLogFile(); 
+	return 0;
 }
 
 /*--- The following makes the indenting behavior of emacs compatible
