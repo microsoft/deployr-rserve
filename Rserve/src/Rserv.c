@@ -194,6 +194,9 @@ typedef unsigned long rlen_t;
 #pragma warning( disable : 4068 )
 #pragma warning( disable : 4995 )
 #pragma warning( disable : 4996 )
+#ifdef RSERV_DEBUG
+#pragma warning( disable : 4311 )
+#endif
 
 #define WIN32_LEAN_AND_MEAN
 typedef int socklen_t;
@@ -1922,10 +1925,10 @@ int detach_session(SOCKET s) {
 	while ((port = (((int) random()) & 0x7fff)+32768)>65000) {};
 #endif
 
-	char listenip[32] = { 0 };
+	char* listenip = 0;
 	char* localhostip = "127.0.0.1";
 	if (localonly) {
-		strcpy_s(listenip, strlen(localhostip) + 1, localhostip);
+		listenip = _strdup(localhostip);
 	}
 
 	while (bind(ss,build_sin(&ssa,listenip,port),sizeof(ssa))) {
