@@ -191,6 +191,13 @@ typedef unsigned long rlen_t;
 #define DEFAULT_MAX_CLIENTS 2048
 /* we have no configure for Win32 so we have to take care of socklen_t */
 #ifdef Win32
+#pragma warning( disable : 4068 )
+#pragma warning( disable : 4995 )
+#pragma warning( disable : 4996 )
+#ifdef RSERV_DEBUG
+#pragma warning( disable : 4311 )
+#endif
+
 #define WIN32_LEAN_AND_MEAN
 typedef int socklen_t;
 //#define fprintf fprintf_s
@@ -364,7 +371,7 @@ void getPath(char* szPath)
 		prevptr = ptr++;
 	}
 
-	int i = strlen(szPath) - strlen(prevptr);
+	size_t i = strlen(szPath) - strlen(prevptr);
 
 	if (i > 0)
 	{
@@ -376,25 +383,38 @@ void getPath(char* szPath)
 // Remove path from filename
 #define __SHORT_FILE__ (strrchr(__FILE__, '/') ? strrchr(__FILE__, '/') + 1 : __FILE__)
 
-// Main log macro
+// Main log macroa
 #define __LOG__(format, loglevel, ...) if(gLogFile != NULL){fprintf(gLogFile, "%s %-5s [%s] [%s:%d] " format , getFormattedTime(), loglevel, __func__, __SHORT_FILE__, __LINE__, ## __VA_ARGS__);fflush(gLogFile);}
+#define __LOGSHORT__(format, loglevel, ...) if(gLogFile != NULL) { \
+	fprintf(gLogFile, "%s %-5s " format , getFormattedTime(), loglevel,  ## __VA_ARGS__); \
+	fflush(gLogFile); \
+} else { \
+	printf("%s %-5s " format, getFormattedTime(), loglevel, ## __VA_ARGS__); \
+}
 
 // Specific log macros with 
 #define LOGDEBUG(format, ...) __LOG__(format, "DEBUG", ## __VA_ARGS__)
-#define LOGWARN(format, ...) __LOG__(format, "WARN", ## __VA_ARGS__)
-#define LOGERROR(format, ...) __LOG__(format, "ERROR", ## __VA_ARGS__)
-#define LOGINFO(format, ...) __LOG__(format, "INFO", ## __VA_ARGS__)
+#define LOGWARN(format, ...) __LOGSHORT__(format, "WARN", ## __VA_ARGS__)
+#define LOGERROR(format, ...) __LOGSHORT__(format, "ERROR", ## __VA_ARGS__)
+#define LOGINFO(format, ...) __LOGSHORT__(format, "INFO", ## __VA_ARGS__)
 
-void openLogFile(void)
+void openLogFile(char* logfilename)
 {
 	if (gLogFile != NULL)
 	{
 		return;
 	}
 	char szLogFile[2048];
+	if ((logfilename) && (strlen(logfilename) > 0))
+	{
+		strcpy_s(szLogFile, 2048, logfilename);
+	}
+	else
+	{
 	strcpy_s(szLogFile, 2048, workdir);
 	getPath(szLogFile);
 	strcat_s(szLogFile, 2048, "/RServe.log");
+	}
 
 	gLogFile = _fsopen(szLogFile, "a+", _SH_DENYNO);
 }
@@ -443,7 +463,7 @@ void printLastError()
 		NULL,
 		dLastError,
 		0,
-		(LPWSTR)&strErrorMessage,
+		(LPSTR)&strErrorMessage,
 		0,
 		NULL);
 
@@ -560,9 +580,8 @@ int wfork(int socket, char* parentCmdLine, int idx)
 		if (!WriteFile(hChildStd_IN_Wr, &pi, sizeof(pi), &dwBytes, NULL))
 			return -1;
 	}
-	LOGINFO("create handles... Process = %d Thread = %d \n", (int)winPI[idx].hProcess, (int)winPI[idx].hThread);
-
-	return (int)(winPI[idx]).hProcess;
+    LOGINFO("create handles... Process = %p Thread = %p \n", winPI[idx].hProcess, winPI[idx].hThread);
+	return (int)HandleToLong((winPI[idx]).hProcess);
 }
 
 BOOL WINAPI ConsoleHandler(DWORD CEvent)
@@ -1485,6 +1504,10 @@ static SEXP decode_to_SEXP(unsigned int **buf, int *UPC)
 /* if set Rserve doesn't accept other than local connections. */
 static int localonly = 1;
 
+//*do not create a log file by default
+static int logfile = 0;
+static char* logfilename = "";
+
 /* server socket */
 static SOCKET ss;
 //static SOCKET cs;
@@ -1634,6 +1657,10 @@ static int loadConfig(char *fn)
 #endif
 			if (!strcmp(c,"remote"))
 				localonly = (*p == '1' || *p == 'y' || *p == 'e') ? 0 : 1;
+			if (!strcmp(c, "log"))
+				logfile = (*p == '1' || *p == 'y' || *p == 'e') ? 1 : 0;
+			if (!strcmp(c, "logfilename"))
+				logfilename = (*p) ? _strdup(p) : 0;
 			if (!strcmp(c,"port")) {
 				if (*p) {
 					int np = satoi(p);
@@ -1769,10 +1796,11 @@ static int loadConfig(char *fn)
 				cache_pwd = (*p == 'i') ? 2 : ((*p == '1' || *p == 'y' || *p == 'e') ? 1 : 0);
 		}
     fclose(f);
-	openLogFile();
+	if (logfile)
+		openLogFile(logfilename);
 #ifndef HAS_CRYPT
     if (!usePlain) {
-		LOGERROR("Warning: useplain=no, but this Rserve has no crypt support! Set useplain=yes or compile with crypt support (if your system supports crypt). Falling back to plain text password.\n");
+		LOGWARN("Warning: useplain=no, but this Rserve has no crypt support! Set useplain=yes or compile with crypt support (if your system supports crypt). Falling back to plain text password.\n");
 		usePlain=1;
     }
 #endif
@@ -1937,7 +1965,13 @@ int detach_session(SOCKET s) {
 	while ((port = (((int) random()) & 0x7fff)+32768)>65000) {};
 #endif
 
-	while (bind(ss,build_sin(&ssa,0,port),sizeof(ssa))) {
+	char* listenip = 0;
+	char* localhostip = "127.0.0.1";
+	if (localonly) {
+		listenip = _strdup(localhostip);
+	}
+
+	while (bind(ss,build_sin(&ssa,listenip,port),sizeof(ssa))) {
 		if (errno!=EADDRINUSE) {
 #ifdef RSERV_DEBUG
 			LOGDEBUG("session: error in bind other than EADDRINUSE (0x%x)\n",  errno);
@@ -2587,7 +2621,7 @@ decl_sbthread newConn(void *thp) {
 #ifdef FORKED
 #ifdef Win32
 			donesocks();
-			if (parentPID>0) TerminateProcess((HANDLE)parentPID,SIGTERM);
+			if (parentPID>0) TerminateProcess(LongToHandle((int)parentPID),SIGTERM);
 			ExitProcess(0);
 #else
 			if (parentPID>0) kill(parentPID,SIGTERM);
@@ -3189,14 +3223,14 @@ int getIpAddress(int newfd) {
     socklen_t addr_size = sizeof(struct sockaddr_in);
     int res = getpeername(newfd, (struct sockaddr *)&addr, &addr_size);
     char clientip[20];
-    strcpy(clientip, inet_ntoa(addr.sin_addr));
+    strcpy_s(clientip, strlen(inet_ntoa(addr.sin_addr))+1, inet_ntoa(addr.sin_addr));
     if( strcmp(clientip,"127.0.0.1") == 0) 
          return 1;
     return 0;
 }
 
 #ifdef Win32
-DWORD WINAPI cleanUpLoop(void* data)
+WINAPI cleanUpLoop(void* data)
 {
 	int w, m;
 	while(TRUE)
@@ -3214,7 +3248,7 @@ DWORD WINAPI cleanUpLoop(void* data)
 					if (w == WAIT_OBJECT_0)
 					{
 						winSocks[jj] = INVALID_SOCKET;
-						LOGINFO("close handles... w = %d Process = %d Thread = %d\n", w, (int)winPI[jj].hProcess, (int)winPI[jj].hThread);
+						LOGINFO("close handles... w = %d Process = %p Thread = %p\n", w, winPI[jj].hProcess, winPI[jj].hThread);
 						__try
 						{
 							CloseHandle(winPI[jj].hProcess);
@@ -3249,16 +3283,16 @@ SOCKET cs;
     int iret1;
 #endif
     SAIN ssa,cssa;
-    socklen_t al,cl;
+	socklen_t al;
     int reuse;
-    struct args *sa,*ca;
+	struct args *sa;
     struct sockaddr_in lsa;
     int connfd = 0;
 	struct timeval timv;
 	int selRet=0;
     fd_set readfds;
 #ifdef Win32
-	int nc, m;
+	int m;
 	//	FD_SET connectionSet;
 #endif
     
@@ -3326,9 +3360,14 @@ SOCKET cs;
     LOGDEBUG("Rserve: bind socket port = %d\n",port);
     LOGDEBUG("Rserve: bind socket cancelPort = %d\n",cancelPort);
 #endif
+	if (localonly) {
+		FCF("bind", bind(ss, build_sin(&ssa, "127.0.0.1", port), sizeof(ssa)));
+		FCF("bind", bind(cs, build_sin(&cssa, "127.0.0.1", cancelPort), sizeof(cssa)));
+	}
+	else {
 		FCF("bind",bind(ss,build_sin(&ssa,0,port),sizeof(ssa)));
 		FCF("bind",bind(cs,build_sin(&cssa,0,cancelPort),sizeof(cssa)));
-    
+	}
         FCF("listen",listen(ss, maxlistenq));
 	    FCF("listen",listen(cs, maxlistenq));
      
@@ -3533,7 +3572,7 @@ SOCKET cs;
 
 			//printf("in cancel\n");
 			if (localonly && !localSocketName) {
-				connfd = accept(cs, (struct sockaddr*)NULL, NULL);
+				connfd = (SOCKET)accept(cs, (struct sockaddr*)NULL, NULL);
 				int allowed = getIpAddress(connfd);
 //				int allowed=0;
 
@@ -3552,7 +3591,7 @@ SOCKET cs;
 #ifdef RSERV_DEBUG
 			LOGDEBUG(" just before cancel/ping\n");
 #endif
-                        connfd = accept(cs, (struct sockaddr*)NULL, NULL);
+                        connfd = (SOCKET)accept((SOCKET)cs, (struct sockaddr*)NULL, NULL);
 #ifdef unix
                         startThread(connfd);
 #else
@@ -3721,8 +3760,8 @@ int main(int argc, char **argv)
 				}
 
 				SOCKET socket_duplicate = 0;
-				if ((socket_duplicate = WSASocket(pi.iAddressFamily, pi.iSocketType, pi.iProtocol, &pi, 0, 0)) != INVALID_SOCKET) {
-					LOGERROR("WSASocket=%d\n", socket_duplicate);
+					if ((socket_duplicate = (SOCKET)WSASocket(pi.iAddressFamily, pi.iSocketType, pi.iProtocol, &pi, 0, 0)) != INVALID_SOCKET) {
+						//LOGINFO("WSASocket=%d\n", socket_duplicate);
 				}
 				else {
 					int rc = WSAGetLastError();
