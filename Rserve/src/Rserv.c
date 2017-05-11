@@ -505,7 +505,7 @@ int wfork(int socket, char* parentCmdLine, int idx)
   HANDLE hChildStd_OUT_Wr;
   if (!CreatePipe(&hChildStd_OUT_Rd, &hChildStd_OUT_Wr, &saAttr, 0))
 	  return -1;
-  if (!SetHandleInformation(hChildStd_OUT_Wr, HANDLE_FLAG_INHERIT, 0))
+  if (!SetHandleInformation(hChildStd_OUT_Rd, HANDLE_FLAG_INHERIT, 0))
 	  return -1;
 
   // Set up members of the STARTUPINFO structure. 
