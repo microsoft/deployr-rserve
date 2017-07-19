@@ -382,7 +382,11 @@ int wfork(int socket, char* parentCmdLine, int idx)
   {
 	  return -1;
   }
-  char buf[128];
+  char *cmdline = (char *)malloc(2048 * sizeof(char));
+  if (cmdline == NULL)
+  {
+	  return -1;
+  }
   size_t rc;
   BOOL bSuccess = FALSE;
   int m;
@@ -392,13 +396,31 @@ int wfork(int socket, char* parentCmdLine, int idx)
   saAttr.bInheritHandle = TRUE;
   saAttr.lpSecurityDescriptor = NULL;
 
+  // Create pipes for sending data to the child process.
+  HANDLE hChildStd_IN_Rd;
+  HANDLE hChildStd_IN_Wr;
+  if (!CreatePipe(&hChildStd_IN_Rd, &hChildStd_IN_Wr, &saAttr, 0))
+	  return -1;
+  if (!SetHandleInformation(hChildStd_IN_Wr, HANDLE_FLAG_INHERIT, 0))
+	  return -1;
+  HANDLE hChildStd_OUT_Rd;
+  HANDLE hChildStd_OUT_Wr;
+  if (!CreatePipe(&hChildStd_OUT_Rd, &hChildStd_OUT_Wr, &saAttr, 0))
+	  return -1;
+  if (!SetHandleInformation(hChildStd_OUT_Rd, HANDLE_FLAG_INHERIT, 0))
+	  return -1;
+
   // Set up members of the STARTUPINFO structure. 
   // This structure specifies the STDIN and STDOUT handles for redirection.
   ZeroMemory (&siStartInfo, sizeof (STARTUPINFO));
   siStartInfo.cb = sizeof (STARTUPINFO);
+  siStartInfo.hStdInput = hChildStd_IN_Rd;
+  siStartInfo.hStdOutput = hChildStd_OUT_Wr;
+  siStartInfo.hStdError = hChildStd_OUT_Wr;
+  siStartInfo.dwFlags |= STARTF_USESTDHANDLES;
 
   //get the module name of the current process
-  if (!GetModuleFileNameA (GetModuleHandle (NULL), modname, 512))
+  if (!GetModuleFileNameA (GetModuleHandle (NULL), modname, 2048))
     {
       rc = GetLastError ();
       return -1;
@@ -410,14 +432,13 @@ int wfork(int socket, char* parentCmdLine, int idx)
 	  winSocks[idx] = socket;
 
   //create the command line
-  sprintf_s (buf, 128, "%d --ppid %d", socket, (int)GetCurrentProcessId());
-  strcat_s (modname, 2048, " --win32child ");
-  strcat_s (modname, 2048, buf);
-  strcat_s (modname, 2048, parentCmdLine);
+  sprintf_s (cmdline, 128, " --win32child --ppid %d", (int)GetCurrentProcessId());
+  strcat_s (cmdline, 2048, parentCmdLine);
 
+  printf("start child process: %s %s\n", modname, cmdline);
   // Create the child process. 
-	bSuccess = CreateProcessA (NULL,
-						modname,      // command line 
+  bSuccess = CreateProcessA (modname,
+						cmdline,    // command line 
                         NULL,       // process security attributes 
                         NULL,       // primary thread security attributes 
                         TRUE,       // handles are inherited 
@@ -434,12 +455,30 @@ int wfork(int socket, char* parentCmdLine, int idx)
   ReleaseMutex(ghMutex);
   
   free (modname);
+  free (cmdline);
 
 	// If an error occurs, exit the application. 
 	if (!bSuccess)
 	{
 		printf ("CreateProcess Failed.\n");
 		return -1;
+	}
+    else
+	{
+		// We want the child process to process the request coming in from socket.
+		// For this to work we need to create a duplicate that is attached to the child process.
+		// The duplication has to be done in the parent process. See doc of WSADuplicateSocket for details.
+		WSAPROTOCOL_INFO pi;
+		DWORD dwBytes;
+		if (WSADuplicateSocket((SOCKET)socket, winPI[idx].dwProcessId, &pi))
+		{
+			int rc = WSAGetLastError();
+			printf("rc_WSADuplicateSocket=%d\n", rc);
+			return -1;
+		}
+		// Write the protocol info of the duplicated socket to the STDIN of the child process.
+		if (!WriteFile(hChildStd_IN_Wr, &pi, sizeof(pi), &dwBytes, NULL))
+			return -1;
 	}
 	printf("create handles... Process = %d Thread = %d \n", (int)winPI[idx].hProcess, (int)winPI[idx].hThread);
 
@@ -3578,42 +3617,32 @@ int main(int argc, char **argv)
 				else
 					MAX_CLIENTS = satoi(argv[++i]);
 			}
+#ifdef WIN32
 			//used only when launching Win32 child process via CreateProcess 
 			if (!strcmp(argv[i] + 2, "win32child")) {
 				iWin32Child = 1;
-				if (i + 1 == argc)
-				{
-					fprintf(stderr, "Missing socket specification for --win32child.\n");
-				}
-				else
-				{
-#ifdef WIN32					
-					socket = atoi(argv[++i]);
-					WSAPROTOCOL_INFO pi;
-
-					if (WSADuplicateSocket((SOCKET)socket, GetCurrentProcessId(), &pi))
-					{
+				// We expect the parent process to send us the duplicated socket for the incoming request by STDIN.
+				WSAPROTOCOL_INFO pi;
+				DWORD dwBytes;
+				HANDLE hStdin = GetStdHandle(STD_INPUT_HANDLE);
+				if (!ReadFile(hStdin, &pi, sizeof(pi), &dwBytes, NULL))	{
 						int rc = WSAGetLastError();
 						printf("rc_WSADuplicateSocket=%d\n", rc);
 						return -1;
 					}
 
 					SOCKET socket_duplicate = 0;
-					if ((socket_duplicate = WSASocket(pi.iAddressFamily, pi.iSocketType, pi.iProtocol, &pi, 0, 0)) != INVALID_SOCKET)
-					{
+					if ((socket_duplicate = WSASocket(pi.iAddressFamily, pi.iSocketType, pi.iProtocol, &pi, 0, 0)) != INVALID_SOCKET) {
 						printf("WSASocket=%d\n", socket_duplicate);
 					}
-					else
-					{
+					else {
 						int rc = WSAGetLastError();
 						printf("rc_WSASocket=%d\n", rc);
 						return -1;
 					}
 					socket = socket_duplicate;
-
-#endif
-				}
 			}
+#endif
 			if (!strcmp(argv[i] + 2, "ppid")) {
 				if (i + 1 == argc)
 					fprintf(stderr, "Missing parent PID specification for --ppid.\n");
