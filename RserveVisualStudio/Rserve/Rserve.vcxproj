@@ -25,6 +25,7 @@
     <ProjectGuid>{9A9A0D8A-FBF3-49FC-9A84-F394ACA4E72D}</ProjectGuid>
     <Keyword>Win32Proj</Keyword>
     <RootNamespace>Rserve</RootNamespace>
+    <WindowsTargetPlatformVersion>10.0.17763.0</WindowsTargetPlatformVersion>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'" Label="Configuration">
@@ -49,7 +50,7 @@
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration">
     <ConfigurationType>Application</ConfigurationType>
     <UseDebugLibraries>false</UseDebugLibraries>
-    <PlatformToolset>v140</PlatformToolset>
+    <PlatformToolset>v141</PlatformToolset>
     <WholeProgramOptimization>true</WholeProgramOptimization>
     <CharacterSet>MultiByte</CharacterSet>
   </PropertyGroup>
@@ -101,7 +102,7 @@
       <WarningLevel>Level3</WarningLevel>
       <Optimization>Disabled</Optimization>
       <PreprocessorDefinitions>WIN32;_DEBUG;_CONSOLE;_LIB;Win32;_R_;RSERV_DEBUG;NO_CONFIG_H;_SECURE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>$(ProjectDir);$(ProjectDir)..\..\Rserve\src;$(ProjectDir)..\..\Rserve\src\include;C:\Program Files\Microsoft\R Server\R_SERVER\include;C:\Program Files\Microsoft\R Server\R_SERVER\include\R_ext;c:\Program Files\Microsoft\MRO-3.3.2\include\</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir);$(ProjectDir)..\..\Rserve\src;$(ProjectDir)..\..\Rserve\src\include;C:\Program Files\Microsoft\R Server\R_SERVER\include;C:\Program Files\Microsoft\R Server\R_SERVER\include\R_ext;c:\Program Files\Microsoft\R Open\R-3.5.1\include\</AdditionalIncludeDirectories>
       <RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>
     </ClCompile>
     <Link>
@@ -136,7 +137,7 @@
       <FunctionLevelLinking>true</FunctionLevelLinking>
       <IntrinsicFunctions>true</IntrinsicFunctions>
       <PreprocessorDefinitions>WIN32;NDEBUG;_CONSOLE;_LIB;Win32;_R_;NO_CONFIG_H;_SECURE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>$(ProjectDir);$(ProjectDir)\..\..\Rserve\src;$(ProjectDir)\..\..\Rserve\src\include;C:\Program Files\Microsoft\MRO-for-RRE\8.0\R-3.2.2\include;c:\Program Files\Microsoft\MRO-3.3.2\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir);$(ProjectDir)\..\..\Rserve\src;$(ProjectDir)\..\..\Rserve\src\include;c:\Program Files\Microsoft\R Open\R-3.5.1\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <UndefinePreprocessorDefinitions>
       </UndefinePreprocessorDefinitions>
       <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
