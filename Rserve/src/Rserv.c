@@ -629,7 +629,7 @@ static char *getParseName(int n) {
 
 static rlen_t getStorageSize(SEXP x) {
     int t = TYPEOF(x);
-    rlen_t tl = LENGTH(x); /* although LENGTH can only be 32-bit use rlen_t to avoid downcasting */
+    rlen_t tl = XLENGTH(x); /* although LENGTH can only be 32-bit use rlen_t to avoid downcasting */
     rlen_t len = 4;
     
 #ifdef RSERV_DEBUG
@@ -781,7 +781,7 @@ static unsigned int* storeSEXP(unsigned int* buf, SEXP x, rlen_t storage_size) {
 		*buf=itop(XT_ARRAY_DOUBLE|hasAttr);
 		buf++;
 		attrFixup;
-		while(i < LENGTH(x)) {
+		while(i < XLENGTH(x)) {
 			fixdcpy(buf, REAL(x) + i);
 			buf += 2; /* sizeof(double)=2*sizeof(int) */
 			i++;
@@ -794,7 +794,7 @@ static unsigned int* storeSEXP(unsigned int* buf, SEXP x, rlen_t storage_size) {
 		*buf = itop(XT_ARRAY_CPLX|hasAttr);
 		buf++;
 		attrFixup;
-		while(i < LENGTH(x)) {
+		while(i < XLENGTH(x)) {
 			fixdcpy(buf, &(COMPLEX(x)[i].r));
 			buf += 2; /* sizeof(double)=2*sizeof(int) */
 			fixdcpy(buf, &(COMPLEX(x)[i].i));
