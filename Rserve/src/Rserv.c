@@ -629,6 +629,7 @@ static char *getParseName(int n) {
 
 static rlen_t getStorageSize(SEXP x) {
     int t = TYPEOF(x);
+	/* Change LENGTH to XLENGTH to support long vectors for R 3.5*/
     rlen_t tl = XLENGTH(x); /* although LENGTH can only be 32-bit use rlen_t to avoid downcasting */
     rlen_t len = 4;
     
