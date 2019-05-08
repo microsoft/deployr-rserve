@@ -1,8 +1,10 @@
+REM Run this in Command prompt "x64 Native Tools Command Prompt for VS 2017"
+
 
 REM taken from:  http://stackoverflow.com/questions/33136486/program-in-c-compiled-with-embedded-r-dll-crashes-when-calling-standard-c-functi
 
 setlocal
-call "C:\Program Files (x86)\Microsoft Visual Studio 12.0\VC\vcvarsall.bat" amd64
+call "C:\Program Files (x86)\Microsoft Visual Studio\2017\Enterprise\Common7\Tools\vsdevcmd\vsdevcmd\ext\vcvars.bat" -arch=x64
 SET MACHINE=x64
 SET LIBNAME=R
 dumpbin /exports %LIBNAME%.dll > %LIBNAME%.exports
